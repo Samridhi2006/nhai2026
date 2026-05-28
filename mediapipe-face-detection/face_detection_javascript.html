@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<!--
+MediaPipe Face Detection - JavaScript Implementation
+Source: https://chuoling.github.io/mediapipe/solutions/face_detection.html
+License: Apache 2.0
+
+This web demo implements real-time face detection using MediaPipe
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MediaPipe Face Detection</title>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js" crossorigin="anonymous"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background-color: #f0f0f0;
+    }
+    .container {
+      max-width: 1280px;
+      margin: 0 auto;
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    h1 {
+      text-align: center;
+      color: #333;
+    }
+    .video-container {
+      position: relative;
+      width: 100%;
+      max-width: 1280px;
+      margin: 20px auto;
+    }
+    video.input_video {
+      display: none;
+    }
+    canvas.output_canvas {
+      width: 100%;
+      max-width: 1280px;
+      border: 2px solid #333;
+      border-radius: 4px;
+    }
+    .controls {
+      text-align: center;
+      margin: 20px 0;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      margin: 5px;
+    }
+    button:hover {
+      background-color: #45a049;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>MediaPipe Face Detection</h1>
+    <div class="video-container">
+      <video class="input_video"></video>
+      <canvas class="output_canvas" width="1280px" height="720px"></canvas>
+    </div>
+    <div class="controls">
+      <button onclick="toggleCamera()">Start/Stop Camera</button>
+    </div>
+  </div>
+</body>
+</html>
+
+<script type="module">
+const videoElement = document.getElementsByClassName('input_video')[0];
+const canvasElement = document.getElementsByClassName('output_canvas')[0];
+const canvasCtx = canvasElement.getContext('2d');
+
+let camera = null;
+
+/**
+ * Process face detection results and draw on canvas
+ */
+function onResults(results) {
+  // Clear and redraw
+  canvasCtx.save();
+  canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+  canvasCtx.drawImage(
+      results.image, 0, 0, canvasElement.width, canvasElement.height);
+  
+  if (results.detections.length > 0) {
+    // Draw bounding boxes and landmarks for each detected face
+    for (let detection of results.detections) {
+      // Draw bounding box
+      drawingUtils.drawRectangle(
+          canvasCtx, detection.boundingBox,
+          {color: 'blue', lineWidth: 4, fillColor: '#00000000'});
+      
+      // Draw landmarks (eye, nose, mouth, ears)
+      drawingUtils.drawLandmarks(canvasCtx, detection.landmarks, {
+        color: 'red',
+        radius: 5,
+      });
+    }
+  }
+  canvasCtx.restore();
+}
+
+/**
+ * Initialize face detection
+ */
+const faceDetection = new FaceDetection({locateFile: (file) => {
+  return `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection@0.0/${file}`;
+}});
+
+faceDetection.setOptions({
+  modelSelection: 0,  // 0 for short-range, 1 for full-range
+  minDetectionConfidence: 0.5
+});
+
+faceDetection.onResults(onResults);
+
+/**
+ * Toggle camera on/off
+ */
+function toggleCamera() {
+  if (camera) {
+    camera.stop();
+    camera = null;
+  } else {
+    camera = new Camera(videoElement, {
+      onFrame: async () => {
+        await faceDetection.send({image: videoElement});
+      },
+      width: 1280,
+      height: 720
+    });
+    camera.start();
+  }
+}
+
+// Auto-start camera when page loads
+window.addEventListener('load', () => {
+  camera = new Camera(videoElement, {
+    onFrame: async () => {
+      await faceDetection.send({image: videoElement});
+    },
+    width: 1280,
+    height: 720
+  });
+  camera.start();
+});
+</script>

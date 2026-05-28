@@ -1,0 +1,18 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"name": "react-native-vision-camera",
+			"path": "../Users/samri/react-native-vision-camera"
+		},
+		{
+			"name": "react-native-fast-tflite",
+			"path": "react-native-fast-tflite"
+		}
+	],
+	"settings": {
+		"powershell.cwd": "nhai"
+	}
+}
