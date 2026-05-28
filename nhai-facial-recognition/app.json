@@ -1,0 +1,43 @@
+{
+  "expo": {
+    "name": "NHAI Facial Recognition",
+    "slug": "nhai-facial-recognition",
+    "version": "1.0.0",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "plugins": [
+      "expo-dev-client"
+    ],
+    "ios": {
+      "supportsTabletMode": false,
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Camera access required for facial recognition",
+        "NSLocationWhenInUseUsageDescription": "Location required for attendance tracking"
+      }
+    },
+    "android": {
+      "permissions": [
+        "CAMERA",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "INTERNET",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ],
+      "package": "com.nhai2006.nhaifacialrecognition"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "9e7c596e-97dd-483c-8598-1d16d23f23f1"
+      }
+    }
+  }
+}
