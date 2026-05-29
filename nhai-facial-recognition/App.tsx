@@ -8,6 +8,8 @@ import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
 import { Logger } from './src/utils/logger';
 import { EncryptionService } from './src/services/EncryptionService';
 import { SyncService } from './src/services/SyncService';
+import { FaceStorage } from './src/services/FaceStorage';
+import { LivenessService } from './src/services/LivenessService';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { RegistrationScreen } from './src/screens/RegistrationScreen';
 import { VerificationScreen } from './src/screens/VerificationScreen';
@@ -33,6 +35,14 @@ export default function App() {
       const encryptionService = EncryptionService.getInstance();
       await encryptionService.initialize();
 
+      // Initialize face storage
+      Logger.info('Initializing face storage');
+      await FaceStorage.initialize();
+
+      // Initialize liveness service
+      Logger.info('Initializing liveness service');
+      await LivenessService.initialize();
+
       // Initialize sync service
       Logger.info('Initializing sync service');
       const syncService = SyncService.getInstance();
@@ -57,7 +67,10 @@ export default function App() {
         return <HomeScreen onNavigate={handleNavigate} />;
       case 'Registration':
         return (
-          <RegistrationScreen onSuccess={() => handleNavigate('Home')} />
+          <RegistrationScreen
+            onSuccess={() => handleNavigate('Home')}
+            onBack={() => handleNavigate('Home')}
+          />
         );
       case 'Verification':
         return (

@@ -1,0 +1,261 @@
+commit 69d746376be71a475adbdd9ed4b579f702ba8a7c
+Author: Samridhi <samridhi@nhai2026.dev>
+Date:   Fri May 29 13:53:35 2026 +0000
+
+    fix: initialize all services, remove duplicate code, fix worklet compatibility
+    
+    - App.tsx: initialize FaceStorage, LivenessService, and TFLiteService on startup
+    - FaceStorage.ts: remove duplicate cosineSimilarity/batchCosineSimilarity/MATCH_THRESHOLDS;
+      import from math.ts instead; re-export for backward compatibility; add ACCURACY_PROFILE
+    - frameProcessor.worklet.ts: remove Logger import (not worklet-compatible)
+    - RegistrationScreen.tsx: add onBack prop separate from onSuccess
+    - VerificationScreen.tsx: fix back button style to be consistent with other screens
+    - SyncService.ts: clean up stray blank lines in imports
+
+diff --git a/nhai-facial-recognition/App.tsx b/nhai-facial-recognition/App.tsx
+index 538ec59..cd59162 100644
+--- a/nhai-facial-recognition/App.tsx
++++ b/nhai-facial-recognition/App.tsx
+@@ -8,6 +8,8 @@ import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
+ import { Logger } from './src/utils/logger';
+ import { EncryptionService } from './src/services/EncryptionService';
+ import { SyncService } from './src/services/SyncService';
++import { FaceStorage } from './src/services/FaceStorage';
++import { LivenessService } from './src/services/LivenessService';
+ import { HomeScreen } from './src/screens/HomeScreen';
+ import { RegistrationScreen } from './src/screens/RegistrationScreen';
+ import { VerificationScreen } from './src/screens/VerificationScreen';
+@@ -33,6 +35,14 @@ export default function App() {
+       const encryptionService = EncryptionService.getInstance();
+       await encryptionService.initialize();
+ 
++      // Initialize face storage
++      Logger.info('Initializing face storage');
++      await FaceStorage.initialize();
++
++      // Initialize liveness service
++      Logger.info('Initializing liveness service');
++      await LivenessService.initialize();
++
+       // Initialize sync service
+       Logger.info('Initializing sync service');
+       const syncService = SyncService.getInstance();
+@@ -57,7 +67,10 @@ export default function App() {
+         return <HomeScreen onNavigate={handleNavigate} />;
+       case 'Registration':
+         return (
+-          <RegistrationScreen onSuccess={() => handleNavigate('Home')} />
++          <RegistrationScreen
++            onSuccess={() => handleNavigate('Home')}
++            onBack={() => handleNavigate('Home')}
++          />
+         );
+       case 'Verification':
+         return (
+diff --git a/nhai-facial-recognition/src/processors/frameProcessor.worklet.ts b/nhai-facial-recognition/src/processors/frameProcessor.worklet.ts
+index 08e6287..52e459e 100644
+--- a/nhai-facial-recognition/src/processors/frameProcessor.worklet.ts
++++ b/nhai-facial-recognition/src/processors/frameProcessor.worklet.ts
+@@ -11,7 +11,6 @@
+ import { Frame, runOnJS } from 'react-native-vision-camera';
+ import { resize } from 'vision-camera-resize-plugin';
+ import { TFLiteService, FaceDetection } from '../services/TFLiteService';
+-import { Logger } from '../utils/logger';
+ 
+ // Frame processor callback - updates UI with detections
+ let onFaceDetectionCallback: ((detections: FaceDetection | null, frameTime: number) => void) | null = null;
+diff --git a/nhai-facial-recognition/src/screens/RegistrationScreen.tsx b/nhai-facial-recognition/src/screens/RegistrationScreen.tsx
+index c8a5a56..eff991f 100644
+--- a/nhai-facial-recognition/src/screens/RegistrationScreen.tsx
++++ b/nhai-facial-recognition/src/screens/RegistrationScreen.tsx
+@@ -17,9 +17,10 @@ import { Logger } from '../utils/logger';
+ 
+ interface RegistrationScreenProps {
+   onSuccess: () => void;
++  onBack?: () => void;
+ }
+ 
+-export const RegistrationScreen: React.FC<RegistrationScreenProps> = ({ onSuccess }) => {
++export const RegistrationScreen: React.FC<RegistrationScreenProps> = ({ onSuccess, onBack }) => {
+   const [name, setName] = useState('');
+   const [isProcessing, setIsProcessing] = useState(false);
+ 
+@@ -90,7 +91,7 @@ export const RegistrationScreen: React.FC<RegistrationScreenProps> = ({ onSucces
+ 
+         <TouchableOpacity
+           style={styles.backButton}
+-          onPress={onSuccess}
++          onPress={onBack ?? onSuccess}
+           disabled={isProcessing}
+         >
+           <Text style={styles.backButtonText}>Back</Text>
+diff --git a/nhai-facial-recognition/src/screens/VerificationScreen.tsx b/nhai-facial-recognition/src/screens/VerificationScreen.tsx
+index 718d62c..124a369 100644
+--- a/nhai-facial-recognition/src/screens/VerificationScreen.tsx
++++ b/nhai-facial-recognition/src/screens/VerificationScreen.tsx
+@@ -153,15 +153,18 @@ const styles = StyleSheet.create({
+     marginBottom: 32,
+   },
+   backButton: {
+-    backgroundColor: '#007AFF',
++    backgroundColor: '#fff',
+     paddingHorizontal: 32,
+     paddingVertical: 12,
+     borderRadius: 8,
+     alignItems: 'center',
++    borderWidth: 1,
++    borderColor: '#ddd',
++    margin: 16,
+   },
+   backButtonText: {
+-    color: '#fff',
++    color: '#666',
+     fontSize: 16,
+-    fontWeight: 'bold',
++    fontWeight: '600',
+   },
+ });
+diff --git a/nhai-facial-recognition/src/services/FaceStorage.ts b/nhai-facial-recognition/src/services/FaceStorage.ts
+index ecbe0e4..2bf19ba 100644
+--- a/nhai-facial-recognition/src/services/FaceStorage.ts
++++ b/nhai-facial-recognition/src/services/FaceStorage.ts
+@@ -3,6 +3,22 @@
+  * Handles face registration, storage, and cosine similarity matching
+  */
+ 
++import { cosineSimilarity, batchCosineSimilarity, MATCH_THRESHOLDS } from '../utils/math';
++
++// Re-export for backward compatibility
++export { cosineSimilarity, batchCosineSimilarity, MATCH_THRESHOLDS };
++
++/**
++ * MobileFaceNet INT8 accuracy profile
++ */
++export const ACCURACY_PROFILE = {
++  model: 'MobileFaceNet INT8',
++  lfwAccuracy: 0.98,
++  falseAcceptanceRate: 0.001, // 0.1% at threshold 0.6
++  falseRejectionRate: 0.05, // 5% at threshold 0.6
++  recommendedThreshold: 0.6,
++};
++
+ export interface StoredFace {
+   id: string;
+   name: string;
+@@ -147,101 +163,6 @@ export class FaceStorage {
+   }
+ }
+ 
+-/**
+- * Cosine Similarity Calculation
+- * Range: [-1, 1], higher = more similar
+- * For face embeddings: typically [0.3, 1.0]
+- */
+-export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
+-  if (a.length !== b.length) {
+-    throw new Error('Vector dimensions mismatch');
+-  }
+-
+-  let dotProduct = 0;
+-  let magnitudeA = 0;
+-  let magnitudeB = 0;
+-
+-  // Single pass: calculate dot product and magnitudes
+-  for (let i = 0; i < a.length; i++) {
+-    dotProduct += a[i] * b[i];
+-    magnitudeA += a[i] * a[i];
+-    magnitudeB += b[i] * b[i];
+-  }
+-
+-  magnitudeA = Math.sqrt(magnitudeA);
+-  magnitudeB = Math.sqrt(magnitudeB);
+-
+-  if (magnitudeA === 0 || magnitudeB === 0) {
+-    return 0;
+-  }
+-
+-  return dotProduct / (magnitudeA * magnitudeB);
+-}
+-
+-/**
+- * Batch cosine similarity (optimized for multiple comparisons)
+- */
+-export function batchCosineSimilarity(
+-  query: Float32Array,
+-  database: Float32Array[],
+-  threshold: number = 0.5
+-): Array<{ score: number; index: number }> {
+-  // Pre-compute query magnitude
+-  let queryMag = 0;
+-  for (let i = 0; i < query.length; i++) {
+-    queryMag += query[i] * query[i];
+-  }
+-  queryMag = Math.sqrt(queryMag);
+-
+-  const results: Array<{ score: number; index: number }> = [];
+-
+-  for (let idx = 0; idx < database.length; idx++) {
+-    const stored = database[idx];
+-    let dotProduct = 0;
+-    let storedMag = 0;
+-
+-    for (let i = 0; i < query.length; i++) {
+-      dotProduct += query[i] * stored[i];
+-      storedMag += stored[i] * stored[i];
+-    }
+-
+-    storedMag = Math.sqrt(storedMag);
+-    const similarity = dotProduct / (queryMag * storedMag);
+-
+-    if (similarity > threshold) {
+-      results.push({ score: similarity, index: idx });
+-    }
+-  }
+-
+-  // Sort by similarity descending
+-  results.sort((a, b) => b.score - a.score);
+-
+-  return results;
+-}
+-
+-/**
+- * Match confidence thresholds for MobileFaceNet INT8
+- * Calibrated for NHAI field operations
+- */
+-export const MATCH_THRESHOLDS = {
+-  veryStrict: 0.7, // FRR 1% (Field secure checkpoint)
+-  strict: 0.65, // FRR 2% (High security)
+-  normal: 0.6, // FRR 5% (Balanced - RECOMMENDED)
+-  relaxed: 0.55, // FRR 10% (High acceptance)
+-  experimental: 0.5, // FRR 15% (Testing only)
+-};
+-
+-/**
+- * MobileFaceNet INT8 accuracy profile
+- */
+-export const ACCURACY_PROFILE = {
+-  model: 'MobileFaceNet INT8',
+-  lfwAccuracy: 0.98,
+-  falseAcceptanceRate: 0.001, // 0.1% at threshold 0.6
+-  falseRejectionRate: 0.05, // 5% at threshold 0.6
+-  recommendedThreshold: 0.6,
+-};
+-
+ // Utility functions
+ function generateId(): string {
+   // Simple UUID-like ID generation
+diff --git a/nhai-facial-recognition/src/services/SyncService.ts b/nhai-facial-recognition/src/services/SyncService.ts
+index 5694e1a..d595b6f 100644
+--- a/nhai-facial-recognition/src/services/SyncService.ts
++++ b/nhai-facial-recognition/src/services/SyncService.ts
+@@ -5,9 +5,7 @@
+ 
+ 
+ import { Logger } from '../utils/logger';
+-import { CONFIG } from '../constants/config';
+-
+-export class SyncService {
++import { CONFIG } from '../constants/config';export class SyncService {
+   private static instance: SyncService;
+   private isOnline = false;
+   private syncInProgress = false;

@@ -11,7 +11,6 @@
 import { Frame, runOnJS } from 'react-native-vision-camera';
 import { resize } from 'vision-camera-resize-plugin';
 import { TFLiteService, FaceDetection } from '../services/TFLiteService';
-import { Logger } from '../utils/logger';
 
 // Frame processor callback - updates UI with detections
 let onFaceDetectionCallback: ((detections: FaceDetection | null, frameTime: number) => void) | null = null;

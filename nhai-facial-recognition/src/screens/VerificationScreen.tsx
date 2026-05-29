@@ -153,15 +153,18 @@ const styles = StyleSheet.create({
     marginBottom: 32,
   },
   backButton: {
-    backgroundColor: '#007AFF',
+    backgroundColor: '#fff',
     paddingHorizontal: 32,
     paddingVertical: 12,
     borderRadius: 8,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#ddd',
+    margin: 16,
   },
   backButtonText: {
-    color: '#fff',
+    color: '#666',
     fontSize: 16,
-    fontWeight: 'bold',
+    fontWeight: '600',
   },
 });

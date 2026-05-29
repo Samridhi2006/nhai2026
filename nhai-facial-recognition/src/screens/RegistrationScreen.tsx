@@ -17,9 +17,10 @@ import { Logger } from '../utils/logger';
 
 interface RegistrationScreenProps {
   onSuccess: () => void;
+  onBack?: () => void;
 }
 
-export const RegistrationScreen: React.FC<RegistrationScreenProps> = ({ onSuccess }) => {
+export const RegistrationScreen: React.FC<RegistrationScreenProps> = ({ onSuccess, onBack }) => {
   const [name, setName] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
 
@@ -90,7 +91,7 @@ export const RegistrationScreen: React.FC<RegistrationScreenProps> = ({ onSucces
 
         <TouchableOpacity
           style={styles.backButton}
-          onPress={onSuccess}
+          onPress={onBack ?? onSuccess}
           disabled={isProcessing}
         >
           <Text style={styles.backButtonText}>Back</Text>
