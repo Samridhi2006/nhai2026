@@ -24,7 +24,7 @@ cd nhai-facial-recognition
 npm install
 
 # 3. Download models (4.3 MB total)
-# Place in src/assets/models/:
+# Place in assets/models/:
 #   - blazeface.tflite (320 KB)
 #   - mobilefacenet_int8.tflite (3.5 MB)
 #   - blink_detector.tflite (500 KB)

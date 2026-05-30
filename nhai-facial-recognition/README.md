@@ -80,7 +80,7 @@ npm install
 ```
 
 ### 2. Download Models (2 min)
-Models go in `src/assets/models/`:
+Models go in `assets/models/`:
 - `blazeface.tflite` (320 KB)
 - `mobilefacenet_int8.tflite` (3.5 MB)
 - `blink_detector.tflite` (500 KB)
