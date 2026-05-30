@@ -1,0 +1,946 @@
+commit e2bfed4bd9254d309c7f0582577f419996156ae0
+Author: Samridhi <samridhi@nhai2026.dev>
+Date:   Sat May 30 07:45:00 2026 +0000
+
+    fix: crash-proof launch, real camera integration, demo mode fallback
+    
+    - App.tsx: add TFLiteService.initialize() at startup
+    - TFLiteService: add modelsAvailable flag + static getter; set _modelsAvailable
+      based on whether BlazeFace + MobileFaceNet loaded successfully
+    - RegistrationScreen: wire real useFrameProcessor for face capture;
+      falls back to demo embedding when models not loaded
+    - AttendanceScreen: real-time face recognition with FPS counter, match records,
+      start/stop scanning; falls back to demo match when models not loaded
+    - package.json: fix vision-camera-resize-plugin v2->v3 (VisionCamera v5 compat)
+    - assets/models/: add placeholder .tflite files + README with download commands
+    - .gitignore: exclude real model binaries from git
+
+diff --git a/nhai-facial-recognition/.gitignore b/nhai-facial-recognition/.gitignore
+new file mode 100644
+index 0000000..9c62367
+--- /dev/null
++++ b/nhai-facial-recognition/.gitignore
+@@ -0,0 +1,5 @@
++
++# TFLite model files — download separately (see assets/models/README.md)
++# Placeholder files are tracked; real models are too large for git
++assets/models/*.tflite
++!assets/models/README.md
+diff --git a/nhai-facial-recognition/App.tsx b/nhai-facial-recognition/App.tsx
+index cd59162..d92b6e7 100644
+--- a/nhai-facial-recognition/App.tsx
++++ b/nhai-facial-recognition/App.tsx
+@@ -10,6 +10,7 @@ import { EncryptionService } from './src/services/EncryptionService';
+ import { SyncService } from './src/services/SyncService';
+ import { FaceStorage } from './src/services/FaceStorage';
+ import { LivenessService } from './src/services/LivenessService';
++import { TFLiteService } from './src/services/TFLiteService';
+ import { HomeScreen } from './src/screens/HomeScreen';
+ import { RegistrationScreen } from './src/screens/RegistrationScreen';
+ import { VerificationScreen } from './src/screens/VerificationScreen';
+@@ -39,6 +40,10 @@ export default function App() {
+       Logger.info('Initializing face storage');
+       await FaceStorage.initialize();
+ 
++      // Initialize TFLite models (non-blocking — app works in demo mode if models missing)
++      Logger.info('Initializing TFLite service');
++      await TFLiteService.initialize();
++
+       // Initialize liveness service
+       Logger.info('Initializing liveness service');
+       await LivenessService.initialize();
+diff --git a/nhai-facial-recognition/assets/models/README.md b/nhai-facial-recognition/assets/models/README.md
+new file mode 100644
+index 0000000..c4caeb7
+--- /dev/null
++++ b/nhai-facial-recognition/assets/models/README.md
+@@ -0,0 +1,20 @@
++# TFLite Model Files — Download Required
++
++The `.tflite` files here are **placeholders**. Replace them with real models before building for production.
++
++## Quick Download (run from this folder)
++
++```bash
++# 1. BlazeFace (face detection ~320KB)
++curl -L "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite" -o blazeface.tflite
++
++# 2. Blink / Iris detector (~500KB)  
++curl -L "https://storage.googleapis.com/mediapipe-models/iris_landmark/iris_landmark/float16/1/iris_landmark.tflite" -o blink_detector.tflite
++
++# 3. MobileFaceNet INT8 (~3.5MB) — download from:
++# https://github.com/sirius-ai/MobileFaceNet_TF/releases
++# Rename the downloaded file to: mobilefacenet_int8.tflite
++```
++
++## Without real models
++The app runs in **demo mode** — camera is shown, face detection is simulated. All UI works.
+diff --git a/nhai-facial-recognition/package.json b/nhai-facial-recognition/package.json
+index 40f2023..10c35fb 100644
+--- a/nhai-facial-recognition/package.json
++++ b/nhai-facial-recognition/package.json
+@@ -25,7 +25,7 @@
+     "react-native-background-timer": "^2.4.0",
+     "react-native-network-info": "^5.2.0",
+     "react-native-quick-crypto": "^0.7.0",
+-    "vision-camera-resize-plugin": "^2.0.0",
++    "vision-camera-resize-plugin": "^3.1.0",
+     "axios": "^1.6.0",
+     "uuid": "^9.0.0"
+   },
+diff --git a/nhai-facial-recognition/src/screens/AttendanceScreen.tsx b/nhai-facial-recognition/src/screens/AttendanceScreen.tsx
+index e1fbed6..01898d0 100644
+--- a/nhai-facial-recognition/src/screens/AttendanceScreen.tsx
++++ b/nhai-facial-recognition/src/screens/AttendanceScreen.tsx
+@@ -1,33 +1,43 @@
+ /**
+  * AttendanceScreen - Real-time Face Recognition & Attendance
+- * MVP simplified version - camera integration in Phase 2
++ * ✅ Real camera + TFLite recognition + demo mode fallback
+  */
+ 
+-import React, { useEffect, useState } from 'react';
++import React, { useEffect, useState, useCallback, useRef } from 'react';
+ import {
+-  View,
+-  Text,
+-  StyleSheet,
+-  TouchableOpacity,
+-  Alert,
++  View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView,
+ } from 'react-native';
+-import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
+-import { frameProcessor } from '../processors/frameProcessor.worklet';
++import { Camera, useCameraDevice, useCameraPermission, useFrameProcessor } from 'react-native-vision-camera';
++import { runOnJS } from 'react-native-reanimated';
+ import { FaceStorage } from '../services/FaceStorage';
++import { TFLiteService } from '../services/TFLiteService';
++import { cosineSimilarity, MATCH_THRESHOLDS } from '../utils/math';
+ import { Logger } from '../utils/logger';
+ 
+ interface AttendanceScreenProps {
+   onBack: () => void;
+ }
+ 
+-export const AttendanceScreen: React.FC<AttendanceScreenProps> = ({
+-  onBack,
+-}) => {
+-  const [isSimulating, setIsSimulating] = useState(false);
++interface AttendanceRecord {
++  id: string;
++  name: string;
++  confidence: number;
++  time: string;
++  mode: 'real' | 'demo';
++}
++
++export const AttendanceScreen: React.FC<AttendanceScreenProps> = ({ onBack }) => {
++  const [records, setRecords] = useState<AttendanceRecord[]>([]);
++  const [isScanning, setIsScanning] = useState(false);
++  const [lastMatch, setLastMatch] = useState<string | null>(null);
++  const [fps, setFps] = useState(0);
+   const { hasPermission, requestPermission } = useCameraPermission();
+   const device = useCameraDevice('front');
+   const [cameraActive, setCameraActive] = useState(false);
+-  const CameraView: any = Camera;
++  const modelsReady = TFLiteService.modelsAvailable;
++  const lastProcessTime = useRef(0);
++  const fpsCounter = useRef(0);
++  const fpsTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+ 
+   useEffect(() => {
+     (async () => {
+@@ -38,245 +48,228 @@ export const AttendanceScreen: React.FC<AttendanceScreenProps> = ({
+         setCameraActive(true);
+       }
+     })();
++
++    fpsTimer.current = setInterval(() => {
++      setFps(fpsCounter.current);
++      fpsCounter.current = 0;
++    }, 1000);
++
++    return () => {
++      if (fpsTimer.current) clearInterval(fpsTimer.current);
++    };
+   }, [hasPermission]);
+ 
+-  const simulateAttendance = async () => {
+-    try {
+-      setIsSimulating(true);
+-      Logger.info('Simulating attendance check...');
++  const onMatchFound = useCallback((embedding: number[]) => {
++    if (!isScanning) return;
+ 
+-      if (FaceStorage.getAllFaces().length === 0) {
+-        Alert.alert('No Faces', 'Please register a face first');
+-        setIsSimulating(false);
+-        return;
++    const arr = new Float32Array(embedding);
++    const faces = FaceStorage.getAllFaces();
++    if (faces.length === 0) return;
++
++    let bestMatch = { name: 'Unknown', score: 0, id: '' };
++    for (const face of faces) {
++      const score = cosineSimilarity(arr, face.embedding);
++      if (score > bestMatch.score) {
++        bestMatch = { name: face.name, score, id: face.id };
+       }
++    }
++
++    if (bestMatch.score >= MATCH_THRESHOLDS.normal) {
++      const record: AttendanceRecord = {
++        id: bestMatch.id + Date.now(),
++        name: bestMatch.name,
++        confidence: Math.round(bestMatch.score * 100),
++        time: new Date().toLocaleTimeString(),
++        mode: 'real',
++      };
++      setLastMatch(`✅ ${bestMatch.name} (${record.confidence}%)`);
++      setRecords(prev => [record, ...prev.slice(0, 9)]);
++      setIsScanning(false); // pause after match
++    }
++  }, [isScanning]);
++
++  const onFrameTick = useCallback(() => {
++    fpsCounter.current += 1;
++  }, []);
+ 
+-      // Simulate detection and matching
+-      const mockEmbedding = new Float32Array(128);
+-      for (let i = 0; i < 128; i++) {
+-        mockEmbedding[i] = Math.random() * 2 - 1;
++  // Frame processor — runs on native thread
++  const frameProcessor = useFrameProcessor((frame) => {
++    'worklet';
++    runOnJS(onFrameTick)();
++
++    if (!modelsReady) return;
++
++    try {
++      const now = Date.now();
++      if (now - lastProcessTime.current < 500) return; // process 2fps max
++      lastProcessTime.current = now;
++
++      const detection = TFLiteService.detectFace(frame as any);
++      if (detection && detection.confidence > 0.5) {
++        const embedding = TFLiteService.extractEmbedding(frame as any);
++        if (embedding) {
++          runOnJS(onMatchFound)(Array.from(embedding));
++        }
+       }
++    } catch (_e) {}
++  }, [modelsReady, onMatchFound, onFrameTick]);
+ 
+-      // TODO: In production, this would use TFLiteService to create real embeddings
+-      // For now, we just show the simulation
+-      Logger.info('Mock embedding created for testing');
+-      Alert.alert('Demo', 'Attendance simulation running with mock data');
+-    } catch (error) {
+-      Logger.error('Attendance check failed', error);
+-      Alert.alert('Error', 'Attendance check failed');
+-    } finally {
+-      setIsSimulating(false);
++  const handleDemoAttendance = async () => {
++    const faces = FaceStorage.getAllFaces();
++    if (faces.length === 0) {
++      Alert.alert('No Faces Registered', 'Please register faces first from the Home screen.');
++      return;
+     }
++
++    // Pick a random registered face as demo match
++    const picked = faces[Math.floor(Math.random() * faces.length)];
++    const demoScore = 0.72 + Math.random() * 0.15;
++    const record: AttendanceRecord = {
++      id: picked.id + Date.now(),
++      name: picked.name,
++      confidence: Math.round(demoScore * 100),
++      time: new Date().toLocaleTimeString(),
++      mode: 'demo',
++    };
++    setLastMatch(`✅ ${picked.name} (${record.confidence}%) [demo]`);
++    setRecords(prev => [record, ...prev.slice(0, 9)]);
+   };
+ 
+   return (
+     <View style={styles.container}>
++      {/* Header */}
+       <View style={styles.header}>
+         <Text style={styles.title}>Take Attendance</Text>
+-        <Text style={styles.subtitle}>Real-time Face Recognition</Text>
++        <Text style={styles.subtitle}>
++          {modelsReady ? '🤖 AI Recognition Active' : '⚠️ Demo Mode'}
++        </Text>
+       </View>
+ 
+-      <View style={styles.previewArea}>
++      {/* Camera */}
++      <View style={styles.cameraBox}>
+         {!hasPermission && (
+-          <View style={styles.fallbackContainer}>
+-            <Text style={styles.errorText}>
+-              Camera permission is mandatory for logging field operations.
+-            </Text>
++          <View style={styles.fallback}>
++            <Text style={styles.fallbackText}>Camera permission required</Text>
+           </View>
+         )}
+-
+         {hasPermission && !device && (
+-          <View style={styles.fallbackContainer}>
+-            <Text style={styles.errorText}>
+-              Front camera device layer missing or hardware faulty.
+-            </Text>
++          <View style={styles.fallback}>
++            <Text style={styles.fallbackText}>Front camera not found</Text>
+           </View>
+         )}
+-
+         {device && (
+-          <CameraView
+-            style={StyleSheet.absoluteFill}
+-            device={device}
+-            isActive={cameraActive}
+-            frameProcessor={frameProcessor}
+-            frameProcessorFps={30}
+-          />
++          <>
++            <Camera
++              style={StyleSheet.absoluteFill}
++              device={device}
++              isActive={cameraActive}
++              frameProcessor={frameProcessor}
++              pixelFormat="yuv"
++            />
++            <View style={styles.scanOverlay} pointerEvents="none">
++              <View style={styles.scanBox} />
++              <Text style={styles.scanLabel}>
++                {isScanning ? '🔍 Scanning...' : lastMatch ?? 'Tap Scan to start'}
++              </Text>
++            </View>
++          </>
+         )}
+-
+-        <View style={styles.overlayLayer} pointerEvents="none">
+-          <Text style={styles.uiLabelText}>Align Face Inside Scanner</Text>
+-        </View>
+       </View>
+ 
+-      <View style={styles.statsBox}>
+-        <View style={styles.statItem}>
+-          <Text style={styles.statValue}>30</Text>
+-          <Text style={styles.statLabel}>FPS</Text>
+-        </View>
+-        <View style={styles.statItem}>
+-          <Text style={styles.statValue}>{`<500`}</Text>
+-          <Text style={styles.statLabel}>ms</Text>
+-        </View>
+-        <View style={styles.statItem}>
+-          <Text style={styles.statValue}>✓</Text>
+-          <Text style={styles.statLabel}>Liveness</Text>
+-        </View>
++      {/* Stats */}
++      <View style={styles.statsRow}>
++        <View style={styles.stat}><Text style={styles.statVal}>{fps}</Text><Text style={styles.statLabel}>FPS</Text></View>
++        <View style={styles.stat}><Text style={styles.statVal}>{FaceStorage.getAllFaces().length}</Text><Text style={styles.statLabel}>Registered</Text></View>
++        <View style={styles.stat}><Text style={styles.statVal}>{records.length}</Text><Text style={styles.statLabel}>Matched</Text></View>
++        <View style={styles.stat}><Text style={styles.statVal}>{modelsReady ? '✅' : '⚠️'}</Text><Text style={styles.statLabel}>AI</Text></View>
+       </View>
+ 
+-      <View style={styles.buttonContainer}>
+-        <TouchableOpacity
+-          style={[
+-            styles.simulateButton,
+-            isSimulating && styles.buttonDisabled,
+-          ]}
+-          onPress={simulateAttendance}
+-          disabled={isSimulating}
+-        >
+-          <Text style={styles.buttonText}>
+-            {isSimulating ? 'Processing...' : 'Simulate Attendance'}
+-          </Text>
+-        </TouchableOpacity>
+-
+-        <TouchableOpacity
+-          style={styles.backButton}
+-          onPress={onBack}
+-          disabled={isSimulating}
+-        >
+-          <Text style={styles.backButtonText}>Back</Text>
++      {/* Action Buttons */}
++      <View style={styles.btnRow}>
++        {modelsReady ? (
++          <TouchableOpacity
++            style={[styles.scanBtn, isScanning && styles.scanBtnActive]}
++            onPress={() => { setIsScanning(s => !s); setLastMatch(null); }}
++          >
++            <Text style={styles.scanBtnText}>{isScanning ? '⏹ Stop' : '▶ Start Scan'}</Text>
++          </TouchableOpacity>
++        ) : (
++          <TouchableOpacity style={styles.scanBtn} onPress={handleDemoAttendance}>
++            <Text style={styles.scanBtnText}>▶ Demo Match</Text>
++          </TouchableOpacity>
++        )}
++        <TouchableOpacity style={styles.backBtn} onPress={onBack}>
++          <Text style={styles.backBtnText}>← Back</Text>
+         </TouchableOpacity>
+       </View>
++
++      {/* Records */}
++      {records.length > 0 && (
++        <ScrollView style={styles.recordsList} showsVerticalScrollIndicator={false}>
++          <Text style={styles.recordsTitle}>Today's Attendance</Text>
++          {records.map(r => (
++            <View key={r.id} style={styles.recordItem}>
++              <View>
++                <Text style={styles.recordName}>{r.name}</Text>
++                <Text style={styles.recordMeta}>{r.time} · {r.mode === 'demo' ? 'Demo' : 'AI'}</Text>
++              </View>
++              <Text style={styles.recordScore}>{r.confidence}%</Text>
++            </View>
++          ))}
++        </ScrollView>
++      )}
+     </View>
+   );
+ };
+ 
+ const styles = StyleSheet.create({
+-  container: {
+-    flex: 1,
+-    backgroundColor: '#f5f5f5',
+-  },
+-  header: {
+-    backgroundColor: '#007AFF',
+-    paddingHorizontal: 20,
+-    paddingVertical: 20,
+-    paddingTop: 40,
+-  },
+-  title: {
+-    fontSize: 28,
+-    fontWeight: 'bold',
+-    color: '#fff',
+-  },
+-  subtitle: {
+-    fontSize: 14,
+-    color: '#E0E0E0',
+-    marginTop: 4,
+-  },
+-  previewArea: {
+-    flex: 1,
+-    justifyContent: 'center',
+-    alignItems: 'center',
+-    backgroundColor: '#fff',
+-    margin: 16,
+-    borderRadius: 12,
+-    elevation: 2,
+-  },
+-  fallbackContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
+-  errorText: { color: '#ff3b30', fontSize: 16, textAlign: 'center' },
+-  overlayLayer: { position: 'absolute', bottom: 50, left: 0, right: 0, alignItems: 'center' },
+-  uiLabelText: { color: '#fff', fontSize: 18, fontWeight: '600', backgroundColor: 'rgba(0,0,0,0.6)', padding: 12, borderRadius: 8 },
+-  placeholderText: {
+-    fontSize: 60,
+-    marginBottom: 16,
+-  },
+-  placeholderTitle: {
+-    fontSize: 18,
+-    fontWeight: 'bold',
+-    color: '#333',
+-    marginBottom: 8,
+-  },
+-  placeholderDescription: {
+-    fontSize: 14,
+-    color: '#999',
+-    textAlign: 'center',
+-    paddingHorizontal: 20,
+-  },
+-  resultBox: {
+-    backgroundColor: '#E8F5E9',
+-    marginHorizontal: 16,
+-    padding: 16,
+-    borderRadius: 8,
+-    marginBottom: 12,
+-    borderLeftWidth: 4,
+-    borderLeftColor: '#4CAF50',
+-  },
+-  resultTitle: {
+-    fontSize: 12,
+-    color: '#2E7D32',
+-    fontWeight: '600',
+-    marginBottom: 4,
+-  },
+-  resultName: {
+-    fontSize: 18,
+-    fontWeight: 'bold',
+-    color: '#1B5E20',
+-    marginBottom: 4,
+-  },
+-  resultConfidence: {
+-    fontSize: 14,
+-    color: '#2E7D32',
+-  },
+-  statsBox: {
+-    flexDirection: 'row',
+-    justifyContent: 'space-around',
+-    backgroundColor: '#fff',
+-    marginHorizontal: 16,
+-    borderRadius: 8,
+-    paddingVertical: 12,
+-    marginBottom: 16,
+-    elevation: 2,
+-  },
+-  statItem: {
+-    alignItems: 'center',
+-  },
+-  statValue: {
+-    fontSize: 16,
+-    fontWeight: 'bold',
+-    color: '#007AFF',
+-  },
+-  statLabel: {
+-    fontSize: 12,
+-    color: '#999',
+-    marginTop: 4,
++  container: { flex: 1, backgroundColor: '#f0f4f8' },
++  header: { backgroundColor: '#007AFF', paddingHorizontal: 20, paddingVertical: 20, paddingTop: 48 },
++  title: { fontSize: 26, fontWeight: 'bold', color: '#fff' },
++  subtitle: { fontSize: 13, color: '#cce4ff', marginTop: 2 },
++  cameraBox: {
++    height: 280, backgroundColor: '#111', margin: 16, borderRadius: 14,
++    overflow: 'hidden', justifyContent: 'center', alignItems: 'center',
+   },
+-  buttonContainer: {
+-    paddingHorizontal: 16,
+-    paddingBottom: 20,
++  fallback: { flex: 1, justifyContent: 'center', alignItems: 'center' },
++  fallbackText: { color: '#aaa', fontSize: 15, textAlign: 'center', padding: 20 },
++  scanOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center' },
++  scanBox: {
++    width: 180, height: 180, borderWidth: 2, borderColor: '#00ff88',
++    borderRadius: 12, opacity: 0.8,
+   },
+-  simulateButton: {
+-    backgroundColor: '#007AFF',
+-    paddingVertical: 12,
+-    borderRadius: 8,
+-    alignItems: 'center',
+-    marginBottom: 12,
++  scanLabel: {
++    color: '#fff', fontSize: 14, fontWeight: '600', marginTop: 12,
++    backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20,
+   },
+-  backButton: {
+-    backgroundColor: '#fff',
+-    paddingVertical: 12,
+-    borderRadius: 8,
+-    alignItems: 'center',
+-    borderWidth: 1,
+-    borderColor: '#ddd',
++  statsRow: {
++    flexDirection: 'row', justifyContent: 'space-around',
++    backgroundColor: '#fff', marginHorizontal: 16, borderRadius: 12,
++    paddingVertical: 12, elevation: 2, marginBottom: 12,
+   },
+-  buttonText: {
+-    color: '#fff',
+-    fontSize: 16,
+-    fontWeight: 'bold',
++  stat: { alignItems: 'center' },
++  statVal: { fontSize: 18, fontWeight: 'bold', color: '#007AFF' },
++  statLabel: { fontSize: 11, color: '#999', marginTop: 2 },
++  btnRow: { flexDirection: 'row', gap: 10, marginHorizontal: 16, marginBottom: 12 },
++  scanBtn: {
++    flex: 1, backgroundColor: '#007AFF', paddingVertical: 13,
++    borderRadius: 10, alignItems: 'center',
+   },
+-  backButtonText: {
+-    color: '#666',
+-    fontSize: 14,
+-    fontWeight: '600',
++  scanBtnActive: { backgroundColor: '#d32f2f' },
++  scanBtnText: { color: '#fff', fontSize: 15, fontWeight: 'bold' },
++  backBtn: {
++    flex: 1, backgroundColor: '#fff', paddingVertical: 13, borderRadius: 10,
++    alignItems: 'center', borderWidth: 1, borderColor: '#ddd',
+   },
+-  buttonDisabled: {
+-    opacity: 0.6,
++  backBtnText: { color: '#555', fontSize: 15, fontWeight: '600' },
++  recordsList: { flex: 1, marginHorizontal: 16 },
++  recordsTitle: { fontSize: 14, fontWeight: '700', color: '#333', marginBottom: 8 },
++  recordItem: {
++    backgroundColor: '#fff', borderRadius: 10, padding: 14, marginBottom: 8,
++    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
++    elevation: 1, borderLeftWidth: 4, borderLeftColor: '#4CAF50',
+   },
++  recordName: { fontSize: 16, fontWeight: 'bold', color: '#1a1a2e' },
++  recordMeta: { fontSize: 12, color: '#999', marginTop: 2 },
++  recordScore: { fontSize: 20, fontWeight: 'bold', color: '#4CAF50' },
+ });
+diff --git a/nhai-facial-recognition/src/screens/RegistrationScreen.tsx b/nhai-facial-recognition/src/screens/RegistrationScreen.tsx
+index 6a106a0..dabea40 100644
+--- a/nhai-facial-recognition/src/screens/RegistrationScreen.tsx
++++ b/nhai-facial-recognition/src/screens/RegistrationScreen.tsx
+@@ -1,8 +1,9 @@
+ /**
+  * RegistrationScreen - Face Registration UI
++ * ✅ Real camera with face capture + fallback to demo mode
+  */
+ 
+-import React, { useEffect, useState } from 'react';
++import React, { useEffect, useRef, useState, useCallback } from 'react';
+ import {
+   View,
+   Text,
+@@ -12,9 +13,10 @@ import {
+   Alert,
+   ActivityIndicator,
+ } from 'react-native';
+-import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
+-import { frameProcessor } from '../processors/frameProcessor.worklet';
++import { Camera, useCameraDevice, useCameraPermission, useFrameProcessor } from 'react-native-vision-camera';
++import { runOnJS } from 'react-native-reanimated';
+ import { FaceStorage } from '../services/FaceStorage';
++import { TFLiteService } from '../services/TFLiteService';
+ import { Logger } from '../utils/logger';
+ 
+ interface RegistrationScreenProps {
+@@ -25,10 +27,13 @@ interface RegistrationScreenProps {
+ export const RegistrationScreen: React.FC<RegistrationScreenProps> = ({ onSuccess, onBack }) => {
+   const [name, setName] = useState('');
+   const [isProcessing, setIsProcessing] = useState(false);
++  const [faceDetected, setFaceDetected] = useState(false);
++  const [capturedEmbedding, setCapturedEmbedding] = useState<Float32Array | null>(null);
++  const [statusMsg, setStatusMsg] = useState('Position your face in the frame');
+   const { hasPermission, requestPermission } = useCameraPermission();
+   const device = useCameraDevice('front');
+   const [cameraActive, setCameraActive] = useState(false);
+-  const CameraView: any = Camera;
++  const modelsReady = TFLiteService.modelsAvailable;
+ 
+   useEffect(() => {
+     (async () => {
+@@ -41,6 +46,32 @@ export const RegistrationScreen: React.FC<RegistrationScreenProps> = ({ onSucces
+     })();
+   }, [hasPermission]);
+ 
++  // Called from worklet when a face is detected
++  const onFaceDetected = useCallback((embedding: number[]) => {
++    const arr = new Float32Array(embedding);
++    setCapturedEmbedding(arr);
++    setFaceDetected(true);
++    setStatusMsg('Face captured! Enter name and tap Register.');
++  }, []);
++
++  // Frame processor — runs on native thread
++  const frameProcessor = useFrameProcessor((frame) => {
++    'worklet';
++    if (!modelsReady) return;
++
++    try {
++      const detection = TFLiteService.detectFace(frame as any);
++      if (detection && detection.confidence > 0.5) {
++        const embedding = TFLiteService.extractEmbedding(frame as any);
++        if (embedding) {
++          runOnJS(onFaceDetected)(Array.from(embedding));
++        }
++      }
++    } catch (_e) {
++      // Worklet errors are silently ignored
++    }
++  }, [modelsReady, onFaceDetected]);
++
+   const handleRegister = async () => {
+     if (!name.trim()) {
+       Alert.alert('Error', 'Please enter a name');
+@@ -52,20 +83,36 @@ export const RegistrationScreen: React.FC<RegistrationScreenProps> = ({ onSucces
+     try {
+       Logger.info(`Starting registration for: ${name}`);
+ 
+-      // Simulate face detection and embedding
+-      const mockEmbedding = new Float32Array(128);
+-      for (let i = 0; i < 128; i++) {
+-        mockEmbedding[i] = Math.random();
+-      }
++      let embedding: Float32Array;
+ 
+-      // Register face
+-      const faceId = await FaceStorage.registerFace(name, mockEmbedding);
++      if (capturedEmbedding && modelsReady) {
++        // Use real captured embedding
++        embedding = capturedEmbedding;
++        Logger.info('Using real face embedding');
++      } else {
++        // Demo mode: use random embedding
++        Logger.warn('Models not available — using demo embedding');
++        embedding = new Float32Array(128);
++        for (let i = 0; i < 128; i++) {
++          embedding[i] = Math.random() * 2 - 1;
++        }
++      }
+ 
++      const faceId = await FaceStorage.registerFace(name, embedding);
+       Logger.info(`Face registered: ${faceId}`);
+-      Alert.alert('Success', `Face registered for ${name}`);
++
++      Alert.alert(
++        'Success ✅',
++        modelsReady
++          ? `Face registered for ${name}`
++          : `${name} registered in demo mode (no ML models loaded)`,
++        [{ text: 'OK', onPress: onSuccess }]
++      );
+ 
+       setName('');
+-      onSuccess();
++      setCapturedEmbedding(null);
++      setFaceDetected(false);
++      setStatusMsg('Position your face in the frame');
+     } catch (error) {
+       Logger.error('Registration failed', error);
+       Alert.alert('Error', 'Registration failed: ' + (error as Error).message);
+@@ -78,47 +125,54 @@ export const RegistrationScreen: React.FC<RegistrationScreenProps> = ({ onSucces
+     <View style={styles.container}>
+       <View style={styles.overlay}>
+         <Text style={styles.title}>Register Face</Text>
+-        <Text style={styles.subtitle}>Enter a name and register your face</Text>
++        <Text style={styles.subtitle}>
++          {modelsReady ? 'AI Face Detection Active' : '⚠️ Demo Mode — Models not loaded'}
++        </Text>
+ 
+-        <TextInput
+-          style={styles.input}
+-          placeholder="Enter your name"
+-          placeholderTextColor="#999"
+-          value={name}
+-          onChangeText={setName}
+-          editable={!isProcessing}
+-        />
+-
+-        <View style={[styles.infoBox, { height: 220, marginBottom: 20 }]}
+-        >
++        {/* Camera Preview */}
++        <View style={styles.cameraBox}>
+           {!hasPermission && (
+             <View style={styles.fallbackContainer}>
+-              <Text style={styles.errorText}>
+-                Camera permission is mandatory for registration.
+-              </Text>
++              <Text style={styles.errorText}>Camera permission required</Text>
+             </View>
+           )}
+-
+           {hasPermission && !device && (
+             <View style={styles.fallbackContainer}>
+-              <Text style={styles.errorText}>
+-                Front camera device not found.
+-              </Text>
++              <Text style={styles.errorText}>Front camera not found</Text>
+             </View>
+           )}
+-
+           {device && (
+-            <CameraView
+-              style={StyleSheet.absoluteFill}
+-              device={device}
+-              isActive={cameraActive}
+-              frameProcessor={frameProcessor}
+-              frameProcessorFps={30}
+-            />
++            <>
++              <Camera
++                style={StyleSheet.absoluteFill}
++                device={device}
++                isActive={cameraActive && !isProcessing}
++                frameProcessor={frameProcessor}
++                pixelFormat="yuv"
++              />
++              {/* Face detected indicator */}
++              <View style={[styles.faceIndicator, faceDetected && styles.faceIndicatorActive]}>
++                <Text style={styles.faceIndicatorText}>
++                  {faceDetected ? '✅ Face Captured' : '👤 No Face'}
++                </Text>
++              </View>
++            </>
+           )}
+-
+         </View>
+ 
++        {/* Status message */}
++        <Text style={styles.statusText}>{statusMsg}</Text>
++
++        {/* Name input */}
++        <TextInput
++          style={styles.input}
++          placeholder="Enter employee name"
++          placeholderTextColor="#999"
++          value={name}
++          onChangeText={setName}
++          editable={!isProcessing}
++        />
++
+         <TouchableOpacity
+           style={[styles.button, isProcessing && styles.buttonDisabled]}
+           onPress={handleRegister}
+@@ -127,7 +181,9 @@ export const RegistrationScreen: React.FC<RegistrationScreenProps> = ({ onSucces
+           {isProcessing ? (
+             <ActivityIndicator color="#fff" />
+           ) : (
+-            <Text style={styles.buttonText}>Register</Text>
++            <Text style={styles.buttonText}>
++              {faceDetected ? 'Register Face ✅' : 'Register (Demo)'}
++            </Text>
+           )}
+         </TouchableOpacity>
+ 
+@@ -136,7 +192,7 @@ export const RegistrationScreen: React.FC<RegistrationScreenProps> = ({ onSucces
+           onPress={onBack ?? onSuccess}
+           disabled={isProcessing}
+         >
+-          <Text style={styles.backButtonText}>Back</Text>
++          <Text style={styles.backButtonText}>← Back</Text>
+         </TouchableOpacity>
+       </View>
+     </View>
+@@ -144,80 +200,37 @@ export const RegistrationScreen: React.FC<RegistrationScreenProps> = ({ onSucces
+ };
+ 
+ const styles = StyleSheet.create({
+-  container: {
+-    flex: 1,
+-    backgroundColor: '#f5f5f5',
+-    justifyContent: 'center',
+-    alignItems: 'center',
+-  },
+-  overlay: {
+-    width: '90%',
+-    backgroundColor: '#fff',
+-    borderRadius: 12,
+-    padding: 24,
+-    elevation: 4,
++  container: { flex: 1, backgroundColor: '#f0f4f8', justifyContent: 'center', alignItems: 'center' },
++  overlay: { width: '92%', backgroundColor: '#fff', borderRadius: 16, padding: 24, elevation: 6 },
++  title: { fontSize: 24, fontWeight: 'bold', color: '#1a1a2e', marginBottom: 4 },
++  subtitle: { fontSize: 13, color: '#666', marginBottom: 16 },
++  cameraBox: {
++    height: 240, backgroundColor: '#1a1a2e', borderRadius: 12, marginBottom: 8,
++    overflow: 'hidden', justifyContent: 'center', alignItems: 'center',
+   },
+   fallbackContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
+-  errorText: { color: '#ff3b30', fontSize: 16, textAlign: 'center' },
+-  title: {
+-    fontSize: 24,
+-    fontWeight: 'bold',
+-    color: '#000',
+-    marginBottom: 8,
+-  },
+-  subtitle: {
+-    fontSize: 14,
+-    color: '#666',
+-    marginBottom: 20,
++  errorText: { color: '#ff6b6b', fontSize: 15, textAlign: 'center' },
++  faceIndicator: {
++    position: 'absolute', bottom: 10, alignSelf: 'center',
++    backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20,
+   },
++  faceIndicatorActive: { backgroundColor: 'rgba(0,180,80,0.8)' },
++  faceIndicatorText: { color: '#fff', fontSize: 13, fontWeight: '600' },
++  statusText: { fontSize: 13, color: '#555', textAlign: 'center', marginBottom: 12 },
+   input: {
+-    backgroundColor: '#f5f5f5',
+-    color: '#000',
+-    borderRadius: 8,
+-    paddingHorizontal: 16,
+-    paddingVertical: 12,
+-    marginBottom: 16,
+-    fontSize: 16,
+-    borderWidth: 1,
+-    borderColor: '#ddd',
+-  },
+-  infoBox: {
+-    backgroundColor: '#E3F2FD',
+-    borderRadius: 8,
+-    padding: 12,
+-    marginBottom: 20,
+-  },
+-  infoText: {
+-    color: '#1976D2',
+-    fontSize: 13,
+-    marginBottom: 6,
++    backgroundColor: '#f5f7fa', color: '#000', borderRadius: 10,
++    paddingHorizontal: 16, paddingVertical: 12, marginBottom: 14,
++    fontSize: 16, borderWidth: 1, borderColor: '#e0e0e0',
+   },
+   button: {
+-    backgroundColor: '#007AFF',
+-    paddingHorizontal: 32,
+-    paddingVertical: 12,
+-    borderRadius: 8,
+-    alignItems: 'center',
+-    marginBottom: 12,
+-  },
+-  buttonDisabled: {
+-    opacity: 0.5,
+-  },
+-  buttonText: {
+-    color: '#fff',
+-    fontSize: 16,
+-    fontWeight: 'bold',
++    backgroundColor: '#007AFF', paddingVertical: 14, borderRadius: 10,
++    alignItems: 'center', marginBottom: 10,
+   },
++  buttonDisabled: { opacity: 0.5 },
++  buttonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+   backButton: {
+-    paddingVertical: 12,
+-    alignItems: 'center',
+-    borderWidth: 1,
+-    borderColor: '#ddd',
+-    borderRadius: 8,
+-  },
+-  backButtonText: {
+-    color: '#666',
+-    fontSize: 14,
+-    fontWeight: '600',
++    paddingVertical: 12, alignItems: 'center',
++    borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 10,
+   },
++  backButtonText: { color: '#666', fontSize: 14, fontWeight: '600' },
+ });
+diff --git a/nhai-facial-recognition/src/services/TFLiteService.ts b/nhai-facial-recognition/src/services/TFLiteService.ts
+index fbb79cc..26de78c 100644
+--- a/nhai-facial-recognition/src/services/TFLiteService.ts
++++ b/nhai-facial-recognition/src/services/TFLiteService.ts
+@@ -13,9 +13,15 @@ export class TFLiteService {
+   private _mobileFaceNetModel: TfliteModel | null = null;
+   private _blinkDetectorModel: TfliteModel | null = null;
+   private isInitialized = false;
++  private _modelsAvailable = false;
+ 
+   private constructor() {}
+ 
++  /** Whether all TFLite models loaded successfully */
++  static get modelsAvailable(): boolean {
++    return TFLiteService.getInstance()._modelsAvailable;
++  }
++
+   static getInstance(): TFLiteService {
+     if (!TFLiteService.instance) {
+       TFLiteService.instance = new TFLiteService();
+@@ -75,12 +81,14 @@ export class TFLiteService {
+       }
+ 
+       service.isInitialized = true;
+-      Logger.info('TFLite Service initialization finished.');
++      service._modelsAvailable = !!(service._blazeFaceModel && service._mobileFaceNetModel);
++      Logger.info(`TFLite Service ready. Models available: ${service._modelsAvailable}`);
+     } catch (error) {
+       // Catch-all: Should be rare since individual model loads are wrapped.
+       Logger.error('Fatal crash inside TFLite initialization context', error);
+       // Fallback path to make sure the user interface still renders during development
+       service.isInitialized = true;
++      service._modelsAvailable = false;
+     }
+   }
+ 
