@@ -69,14 +69,23 @@ export class LivenessService {
     const service = LivenessService.getInstance();
     const landmarks = faceDetection.landmarks;
 
-    // Extract eye regions from landmarks
-    const eyeRegions = service.extractEyeRegions(landmarks);
+    // If a blink detector model is available use it, otherwise fallback to EAR
+    let leftEyeOpenness = 0.5;
+    let rightEyeOpenness = 0.5;
 
-    // Run blink detector on both eyes
-    const leftEyeOpenness = TFLiteService.detectBlink(eyeRegions.leftEye);
-    const rightEyeOpenness = TFLiteService.detectBlink(eyeRegions.rightEye);
+    const tflite = TFLiteService.getInstance();
+    if (tflite && (tflite as any)._blinkDetectorModel) {
+      // Run blink detector on both eyes (native model)
+      const eyeRegions = service.extractEyeRegions(landmarks);
+      leftEyeOpenness = TFLiteService.detectBlink(eyeRegions.leftEye);
+      rightEyeOpenness = TFLiteService.detectBlink(eyeRegions.rightEye);
+    } else {
+      // Fallback: calculate Eye Aspect Ratio (EAR) from landmarks
+      const ear = service.calculateEAR(landmarks);
+      leftEyeOpenness = ear;
+      rightEyeOpenness = ear;
+    }
 
-    // Calculate combined eye openness
     const eyeOpenness = (leftEyeOpenness + rightEyeOpenness) / 2;
 
     // Record state
@@ -286,6 +295,43 @@ export class LivenessService {
     // 6. Return as ArrayBuffer
 
     return new ArrayBuffer(size * size);
+  }
+
+  /**
+   * Calculate Eye Aspect Ratio (EAR) from available landmarks.
+   * This is a lightweight geometric fallback when a blink model is not present.
+   * EAR ≈ (vertical_dist1 + vertical_dist2) / (2 * horizontal_dist)
+   * We accept multiple landmark layouts and fall back to a neutral value (0.5).
+   */
+  private calculateEAR(landmarks: Landmark[] | any): number {
+    try {
+      // If landmarks is an array of points (x,y), try to map positions
+      if (Array.isArray(landmarks) && landmarks.length >= 4) {
+        const p1 = landmarks[0]; // right eye / left corner
+        const p4 = landmarks[1]; // left eye / right corner
+
+        // vertical estimates - try nearby points if present
+        const v1 = landmarks[2];
+        const v2 = landmarks[3];
+
+        if (p1 && p4 && v1 && v2 && isFinite(p1.x) && isFinite(p4.x) && isFinite(v1.y) && isFinite(v2.y)) {
+          const horizontal = Math.hypot(p1.x - p4.x, p1.y - p4.y);
+          const vertical1 = Math.hypot(v1.x - v2.x, v1.y - v2.y);
+
+          if (horizontal <= 0) return 0.5;
+
+          // EAR raw value
+          const ear = vertical1 / (2.0 * horizontal);
+          // Clamp and normalize to [0,1]
+          return Math.max(0, Math.min(1, ear));
+        }
+      }
+    } catch (e) {
+      // ignore and fallback
+    }
+
+    // Neutral fallback
+    return 0.5;
   }
 
   /**

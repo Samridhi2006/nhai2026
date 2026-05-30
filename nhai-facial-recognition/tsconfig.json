@@ -17,7 +17,7 @@
     "noUnusedParameters": true,
     "noImplicitReturns": true,
     "forceConsistentCasingInFileNames": true,
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "paths": {
       "@/*": [
@@ -36,6 +36,8 @@
         "./src/types/*"
       ]
     }
+    ,
+    "types": ["node"]
   },
   "include": [
     "src"

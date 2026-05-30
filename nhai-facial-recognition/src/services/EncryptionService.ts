@@ -5,14 +5,12 @@
  */
 
 import { Logger } from '../utils/logger';
-import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'react-native-quick-crypto';
+const QuickCrypto: any = require('react-native-quick-crypto');
 
 // Constants for AES-256-GCM
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 16; // bytes
-const AUTH_TAG_LENGTH = 16; // bytes
 const SALT_LENGTH = 16; // bytes
-const ITERATIONS = 100000; // PBKDF2 iterations
 
 export class EncryptionService {
   private static instance: EncryptionService;
@@ -36,12 +34,12 @@ export class EncryptionService {
   async initialize(): Promise<void> {
     try {
       // Generate random salt for key derivation
-      this.salt = randomBytes(SALT_LENGTH);
+      this.salt = QuickCrypto.randomBytes(SALT_LENGTH) as Buffer;
 
       // Generate master key using PBKDF2
       // In production: retrieve from platform keystore (react-native-keychain)
       const password = 'NHAI-FACIAL-REC-KEY'; // TODO: Retrieve from secure storage
-      this.masterKey = scryptSync(password, this.salt, 32) as Buffer;
+      this.masterKey = QuickCrypto.scryptSync(password, this.salt, 32) as Buffer;
 
       Logger.info('✓ Encryption initialized with AES-256-GCM');
     } catch (error) {
@@ -60,10 +58,10 @@ export class EncryptionService {
 
     try {
       // Generate random IV for this encryption
-      const iv = randomBytes(IV_LENGTH);
+      const iv = QuickCrypto.randomBytes(IV_LENGTH) as Buffer;
 
       // Create cipher with master key
-      const cipher = createCipheriv(ALGORITHM, this.masterKey, iv) as any;
+      const cipher = QuickCrypto.createCipheriv(ALGORITHM, this.masterKey, iv) as any;
 
       // Encrypt the data
       const plaintext = JSON.stringify(data);
@@ -106,7 +104,7 @@ export class EncryptionService {
       const ciphertext = parts[2];
 
       // Create decipher with master key
-      const decipher = createDecipheriv(ALGORITHM, this.masterKey, iv) as any;
+      const decipher = QuickCrypto.createDecipheriv(ALGORITHM, this.masterKey, iv) as any;
 
       // Set authentication tag for verification
       decipher.setAuthTag(authTag);

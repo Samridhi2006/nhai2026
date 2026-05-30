@@ -2,7 +2,7 @@
  * RegistrationScreen - Face Registration UI
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,8 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
+import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
+import { frameProcessor } from '../processors/frameProcessor.worklet';
 import { FaceStorage } from '../services/FaceStorage';
 import { Logger } from '../utils/logger';
 
@@ -23,6 +25,21 @@ interface RegistrationScreenProps {
 export const RegistrationScreen: React.FC<RegistrationScreenProps> = ({ onSuccess, onBack }) => {
   const [name, setName] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const { hasPermission, requestPermission } = useCameraPermission();
+  const device = useCameraDevice('front');
+  const [cameraActive, setCameraActive] = useState(false);
+  const CameraView: any = Camera;
+
+  useEffect(() => {
+    (async () => {
+      if (!hasPermission) {
+        const granted = await requestPermission();
+        if (granted) setCameraActive(true);
+      } else {
+        setCameraActive(true);
+      }
+    })();
+  }, [hasPermission]);
 
   const handleRegister = async () => {
     if (!name.trim()) {
@@ -72,9 +89,34 @@ export const RegistrationScreen: React.FC<RegistrationScreenProps> = ({ onSucces
           editable={!isProcessing}
         />
 
-        <View style={styles.infoBox}>
-          <Text style={styles.infoText}>📸 Camera integration coming soon</Text>
-          <Text style={styles.infoText}>MVP uses mock embeddings for testing</Text>
+        <View style={[styles.infoBox, { height: 220, marginBottom: 20 }]}
+        >
+          {!hasPermission && (
+            <View style={styles.fallbackContainer}>
+              <Text style={styles.errorText}>
+                Camera permission is mandatory for registration.
+              </Text>
+            </View>
+          )}
+
+          {hasPermission && !device && (
+            <View style={styles.fallbackContainer}>
+              <Text style={styles.errorText}>
+                Front camera device not found.
+              </Text>
+            </View>
+          )}
+
+          {device && (
+            <CameraView
+              style={StyleSheet.absoluteFill}
+              device={device}
+              isActive={cameraActive}
+              frameProcessor={frameProcessor}
+              frameProcessorFps={30}
+            />
+          )}
+
         </View>
 
         <TouchableOpacity
@@ -115,6 +157,8 @@ const styles = StyleSheet.create({
     padding: 24,
     elevation: 4,
   },
+  fallbackContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
+  errorText: { color: '#ff3b30', fontSize: 16, textAlign: 'center' },
   title: {
     fontSize: 24,
     fontWeight: 'bold',

@@ -3,7 +3,7 @@
  * MVP simplified version - camera integration in Phase 2
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,8 @@ import {
   TouchableOpacity,
   Alert,
 } from 'react-native';
+import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
+import { frameProcessor } from '../processors/frameProcessor.worklet';
 import { FaceStorage } from '../services/FaceStorage';
 import { Logger } from '../utils/logger';
 
@@ -22,6 +24,21 @@ export const AttendanceScreen: React.FC<AttendanceScreenProps> = ({
   onBack,
 }) => {
   const [isSimulating, setIsSimulating] = useState(false);
+  const { hasPermission, requestPermission } = useCameraPermission();
+  const device = useCameraDevice('front');
+  const [cameraActive, setCameraActive] = useState(false);
+  const CameraView: any = Camera;
+
+  useEffect(() => {
+    (async () => {
+      if (!hasPermission) {
+        const granted = await requestPermission();
+        if (granted) setCameraActive(true);
+      } else {
+        setCameraActive(true);
+      }
+    })();
+  }, [hasPermission]);
 
   const simulateAttendance = async () => {
     try {
@@ -60,11 +77,35 @@ export const AttendanceScreen: React.FC<AttendanceScreenProps> = ({
       </View>
 
       <View style={styles.previewArea}>
-        <Text style={styles.placeholderText}>📷</Text>
-        <Text style={styles.placeholderTitle}>Camera Preview</Text>
-        <Text style={styles.placeholderDescription}>
-          Tap "Simulate" to test attendance with mock face data
-        </Text>
+        {!hasPermission && (
+          <View style={styles.fallbackContainer}>
+            <Text style={styles.errorText}>
+              Camera permission is mandatory for logging field operations.
+            </Text>
+          </View>
+        )}
+
+        {hasPermission && !device && (
+          <View style={styles.fallbackContainer}>
+            <Text style={styles.errorText}>
+              Front camera device layer missing or hardware faulty.
+            </Text>
+          </View>
+        )}
+
+        {device && (
+          <CameraView
+            style={StyleSheet.absoluteFill}
+            device={device}
+            isActive={cameraActive}
+            frameProcessor={frameProcessor}
+            frameProcessorFps={30}
+          />
+        )}
+
+        <View style={styles.overlayLayer} pointerEvents="none">
+          <Text style={styles.uiLabelText}>Align Face Inside Scanner</Text>
+        </View>
       </View>
 
       <View style={styles.statsBox}>
@@ -138,6 +179,10 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     elevation: 2,
   },
+  fallbackContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
+  errorText: { color: '#ff3b30', fontSize: 16, textAlign: 'center' },
+  overlayLayer: { position: 'absolute', bottom: 50, left: 0, right: 0, alignItems: 'center' },
+  uiLabelText: { color: '#fff', fontSize: 18, fontWeight: '600', backgroundColor: 'rgba(0,0,0,0.6)', padding: 12, borderRadius: 8 },
   placeholderText: {
     fontSize: 60,
     marginBottom: 16,
