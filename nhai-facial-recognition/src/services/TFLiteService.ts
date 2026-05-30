@@ -13,8 +13,14 @@ export class TFLiteService {
   private _mobileFaceNetModel: TfliteModel | null = null;
   private _blinkDetectorModel: TfliteModel | null = null;
   private isInitialized = false;
+  private _modelsAvailable = false;
 
   private constructor() {}
+
+  /** True only when both BlazeFace + MobileFaceNet loaded successfully */
+  static get modelsAvailable(): boolean {
+    return TFLiteService.getInstance()._modelsAvailable;
+  }
 
   static getInstance(): TFLiteService {
     if (!TFLiteService.instance) {
@@ -75,12 +81,12 @@ export class TFLiteService {
       }
 
       service.isInitialized = true;
-      Logger.info('TFLite Service initialization finished.');
+      service._modelsAvailable = !!(service._blazeFaceModel && service._mobileFaceNetModel);
+      Logger.info(`TFLite ready. Models available: ${service._modelsAvailable}`);
     } catch (error) {
-      // Catch-all: Should be rare since individual model loads are wrapped.
       Logger.error('Fatal crash inside TFLite initialization context', error);
-      // Fallback path to make sure the user interface still renders during development
       service.isInitialized = true;
+      service._modelsAvailable = false;
     }
   }
 

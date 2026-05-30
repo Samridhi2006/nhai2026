@@ -25,7 +25,7 @@
     "react-native-background-timer": "^2.4.0",
     "react-native-network-info": "^5.2.0",
     "react-native-quick-crypto": "^0.7.0",
-    "vision-camera-resize-plugin": "^2.0.0",
+    "vision-camera-resize-plugin": "^3.1.0",
     "axios": "^1.6.0",
     "uuid": "^9.0.0"
   },

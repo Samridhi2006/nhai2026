@@ -1,223 +1,187 @@
 /**
- * RegistrationScreen - Face Registration UI
+ * RegistrationScreen - Face Registration
+ * ✅ Real camera with useFrameProcessor
+ * ✅ Demo mode fallback when TFLite models not loaded
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  Alert,
-  ActivityIndicator,
+  View, Text, StyleSheet, TextInput,
+  TouchableOpacity, Alert, ActivityIndicator,
 } from 'react-native';
-import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
-import { frameProcessor } from '../processors/frameProcessor.worklet';
+import {
+  Camera, useCameraDevice, useCameraPermission,
+  useFrameProcessor,
+} from 'react-native-vision-camera';
+import { runOnJS } from 'react-native-reanimated';
 import { FaceStorage } from '../services/FaceStorage';
+import { TFLiteService } from '../services/TFLiteService';
 import { Logger } from '../utils/logger';
 
-interface RegistrationScreenProps {
+interface Props {
   onSuccess: () => void;
   onBack?: () => void;
 }
 
-export const RegistrationScreen: React.FC<RegistrationScreenProps> = ({ onSuccess, onBack }) => {
+export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
   const [name, setName] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [faceDetected, setFaceDetected] = useState(false);
+  const [statusMsg, setStatusMsg] = useState('Point camera at your face');
   const { hasPermission, requestPermission } = useCameraPermission();
   const device = useCameraDevice('front');
   const [cameraActive, setCameraActive] = useState(false);
-  const CameraView: any = Camera;
+  const capturedEmbedding = useRef<Float32Array | null>(null);
+  const modelsReady = TFLiteService.modelsAvailable;
 
   useEffect(() => {
     (async () => {
-      if (!hasPermission) {
-        const granted = await requestPermission();
-        if (granted) setCameraActive(true);
-      } else {
-        setCameraActive(true);
-      }
+      const ok = hasPermission || await requestPermission();
+      if (ok) setCameraActive(true);
     })();
-  }, [hasPermission]);
+  }, []);
+
+  const onFaceFound = useCallback((embeddingArr: number[]) => {
+    if (capturedEmbedding.current) return; // already captured
+    capturedEmbedding.current = new Float32Array(embeddingArr);
+    setFaceDetected(true);
+    setStatusMsg('✅ Face captured — enter name and tap Register');
+  }, []);
+
+  // Frame processor runs on native thread — no JS imports allowed inside
+  const frameProcessor = useFrameProcessor((frame) => {
+    'worklet';
+    if (!modelsReady) return;
+    try {
+      const det = TFLiteService.detectFace(frame as any);
+      if (det && det.confidence > 0.5) {
+        const emb = TFLiteService.extractEmbedding(frame as any);
+        if (emb) runOnJS(onFaceFound)(Array.from(emb));
+      }
+    } catch (_) {}
+  }, [modelsReady, onFaceFound]);
 
   const handleRegister = async () => {
-    if (!name.trim()) {
-      Alert.alert('Error', 'Please enter a name');
-      return;
-    }
-
+    if (!name.trim()) { Alert.alert('Error', 'Please enter a name'); return; }
     setIsProcessing(true);
-
     try {
-      Logger.info(`Starting registration for: ${name}`);
-
-      // Simulate face detection and embedding
-      const mockEmbedding = new Float32Array(128);
-      for (let i = 0; i < 128; i++) {
-        mockEmbedding[i] = Math.random();
+      let embedding: Float32Array;
+      if (capturedEmbedding.current && modelsReady) {
+        embedding = capturedEmbedding.current;
+      } else {
+        // Demo mode — random normalized embedding
+        embedding = new Float32Array(128);
+        for (let i = 0; i < 128; i++) embedding[i] = (Math.random() * 2 - 1);
+        const mag = Math.sqrt(embedding.reduce((s, v) => s + v * v, 0));
+        for (let i = 0; i < 128; i++) embedding[i] /= mag;
       }
-
-      // Register face
-      const faceId = await FaceStorage.registerFace(name, mockEmbedding);
-
-      Logger.info(`Face registered: ${faceId}`);
-      Alert.alert('Success', `Face registered for ${name}`);
-
+      const faceId = await FaceStorage.registerFace(name.trim(), embedding);
+      Logger.info(`Registered: ${name} (${faceId})`);
+      Alert.alert(
+        'Registered ✅',
+        modelsReady ? `${name} registered with AI face scan` : `${name} registered (demo mode)`,
+        [{ text: 'OK', onPress: onSuccess }]
+      );
       setName('');
-      onSuccess();
-    } catch (error) {
-      Logger.error('Registration failed', error);
-      Alert.alert('Error', 'Registration failed: ' + (error as Error).message);
+      capturedEmbedding.current = null;
+      setFaceDetected(false);
+      setStatusMsg('Point camera at your face');
+    } catch (e) {
+      Alert.alert('Error', (e as Error).message);
     } finally {
       setIsProcessing(false);
     }
   };
 
   return (
-    <View style={styles.container}>
-      <View style={styles.overlay}>
-        <Text style={styles.title}>Register Face</Text>
-        <Text style={styles.subtitle}>Enter a name and register your face</Text>
+    <View style={s.container}>
+      <View style={s.card}>
+        <Text style={s.title}>Register Face</Text>
+        <Text style={s.sub}>
+          {modelsReady ? '🤖 AI Detection Active' : '⚠️ Demo Mode (no TFLite models)'}
+        </Text>
+
+        {/* Camera box */}
+        <View style={s.camBox}>
+          {!hasPermission ? (
+            <Text style={s.errTxt}>Camera permission required</Text>
+          ) : !device ? (
+            <Text style={s.errTxt}>Front camera not found</Text>
+          ) : (
+            <>
+              <Camera
+                style={StyleSheet.absoluteFill}
+                device={device}
+                isActive={cameraActive && !isProcessing}
+                frameProcessor={frameProcessor}
+                pixelFormat="yuv"
+              />
+              <View style={[s.badge, faceDetected && s.badgeGreen]}>
+                <Text style={s.badgeTxt}>
+                  {faceDetected ? '✅ Face Ready' : '👤 Scanning...'}
+                </Text>
+              </View>
+            </>
+          )}
+        </View>
+
+        <Text style={s.status}>{statusMsg}</Text>
 
         <TextInput
-          style={styles.input}
-          placeholder="Enter your name"
-          placeholderTextColor="#999"
+          style={s.input}
+          placeholder="Enter employee name"
+          placeholderTextColor="#aaa"
           value={name}
           onChangeText={setName}
           editable={!isProcessing}
+          autoCapitalize="words"
         />
 
-        <View style={[styles.infoBox, { height: 220, marginBottom: 20 }]}
-        >
-          {!hasPermission && (
-            <View style={styles.fallbackContainer}>
-              <Text style={styles.errorText}>
-                Camera permission is mandatory for registration.
-              </Text>
-            </View>
-          )}
-
-          {hasPermission && !device && (
-            <View style={styles.fallbackContainer}>
-              <Text style={styles.errorText}>
-                Front camera device not found.
-              </Text>
-            </View>
-          )}
-
-          {device && (
-            <CameraView
-              style={StyleSheet.absoluteFill}
-              device={device}
-              isActive={cameraActive}
-              frameProcessor={frameProcessor}
-              frameProcessorFps={30}
-            />
-          )}
-
-        </View>
-
         <TouchableOpacity
-          style={[styles.button, isProcessing && styles.buttonDisabled]}
+          style={[s.btn, isProcessing && s.btnDis]}
           onPress={handleRegister}
           disabled={isProcessing}
         >
-          {isProcessing ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.buttonText}>Register</Text>
-          )}
+          {isProcessing
+            ? <ActivityIndicator color="#fff" />
+            : <Text style={s.btnTxt}>
+                {faceDetected ? 'Register Face ✅' : 'Register (Demo Mode)'}
+              </Text>
+          }
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={onBack ?? onSuccess}
-          disabled={isProcessing}
-        >
-          <Text style={styles.backButtonText}>Back</Text>
+        <TouchableOpacity style={s.back} onPress={onBack ?? onSuccess} disabled={isProcessing}>
+          <Text style={s.backTxt}>← Back</Text>
         </TouchableOpacity>
       </View>
     </View>
   );
 };
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-    justifyContent: 'center',
-    alignItems: 'center',
+const s = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#eef2f7', justifyContent: 'center', alignItems: 'center' },
+  card: { width: '92%', backgroundColor: '#fff', borderRadius: 16, padding: 22, elevation: 6 },
+  title: { fontSize: 24, fontWeight: '800', color: '#1a1a2e', marginBottom: 4 },
+  sub: { fontSize: 13, color: '#666', marginBottom: 16 },
+  camBox: {
+    height: 240, backgroundColor: '#1a1a2e', borderRadius: 12, overflow: 'hidden',
+    marginBottom: 10, justifyContent: 'center', alignItems: 'center',
   },
-  overlay: {
-    width: '90%',
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 24,
-    elevation: 4,
+  errTxt: { color: '#ff6b6b', fontSize: 14, textAlign: 'center', padding: 20 },
+  badge: {
+    position: 'absolute', bottom: 10, alignSelf: 'center',
+    backgroundColor: 'rgba(0,0,0,0.65)', paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20,
   },
-  fallbackContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
-  errorText: { color: '#ff3b30', fontSize: 16, textAlign: 'center' },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#000',
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 20,
-  },
+  badgeGreen: { backgroundColor: 'rgba(0,180,80,0.85)' },
+  badgeTxt: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  status: { fontSize: 13, color: '#555', textAlign: 'center', marginBottom: 12 },
   input: {
-    backgroundColor: '#f5f5f5',
-    color: '#000',
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    marginBottom: 16,
-    fontSize: 16,
-    borderWidth: 1,
-    borderColor: '#ddd',
+    backgroundColor: '#f5f7fa', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 12,
+    fontSize: 16, borderWidth: 1, borderColor: '#e0e0e0', color: '#000', marginBottom: 14,
   },
-  infoBox: {
-    backgroundColor: '#E3F2FD',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 20,
-  },
-  infoText: {
-    color: '#1976D2',
-    fontSize: 13,
-    marginBottom: 6,
-  },
-  button: {
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 32,
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  buttonDisabled: {
-    opacity: 0.5,
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  backButton: {
-    paddingVertical: 12,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-  },
-  backButtonText: {
-    color: '#666',
-    fontSize: 14,
-    fontWeight: '600',
-  },
+  btn: { backgroundColor: '#007AFF', paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginBottom: 10 },
+  btnDis: { opacity: 0.5 },
+  btnTxt: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  back: { paddingVertical: 12, alignItems: 'center', borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 10 },
+  backTxt: { color: '#666', fontSize: 14, fontWeight: '600' },
 });

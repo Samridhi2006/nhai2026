@@ -5,7 +5,9 @@
 
 
 import { Logger } from '../utils/logger';
-import { CONFIG } from '../constants/config';export class SyncService {
+import { CONFIG } from '../constants/config';
+
+export class SyncService {
   private static instance: SyncService;
   private isOnline = false;
   private syncInProgress = false;

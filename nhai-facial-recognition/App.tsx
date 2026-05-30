@@ -10,6 +10,7 @@ import { EncryptionService } from './src/services/EncryptionService';
 import { SyncService } from './src/services/SyncService';
 import { FaceStorage } from './src/services/FaceStorage';
 import { LivenessService } from './src/services/LivenessService';
+import { TFLiteService } from './src/services/TFLiteService';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { RegistrationScreen } from './src/screens/RegistrationScreen';
 import { VerificationScreen } from './src/screens/VerificationScreen';
@@ -38,6 +39,10 @@ export default function App() {
       // Initialize face storage
       Logger.info('Initializing face storage');
       await FaceStorage.initialize();
+
+      // Initialize TFLite models (non-blocking — app works in demo mode if models missing)
+      Logger.info('Initializing TFLite models');
+      await TFLiteService.initialize();
 
       // Initialize liveness service
       Logger.info('Initializing liveness service');
