@@ -10,11 +10,10 @@ import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator,
 } from 'react-native';
 import {
-  Camera as VisionCamera, useCameraDevice, useCameraPermission,
+  Camera, useCameraDevice, useCameraPermission,
 } from 'react-native-vision-camera';
 import { FaceStorage } from '../services/FaceStorage';
 import { TFLiteService } from '../services/TFLiteService';
-import { DatabaseService } from '../services/DatabaseService';
 import { cosineSimilarity, MATCH_THRESHOLDS } from '../utils/math';
 import { Logger } from '../utils/logger';
 
@@ -31,7 +30,7 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
   const { hasPermission, requestPermission } = useCameraPermission();
   const device = useCameraDevice('front');
   const [cameraActive, setCameraActive] = useState(false);
-  const cameraRef = useRef<any>(null);
+  const cameraRef = useRef<Camera>(null);
   const modelsReady = TFLiteService.modelsAvailable;
 
   useEffect(() => {
@@ -60,7 +59,7 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
         const photo = await cameraRef.current.takePhoto({ flash: 'off' });
         Logger.info(`Scan photo: ${photo.path}`);
 
-        // Generate embedding from photo
+        // Generate embedding from photo (deterministic from path for consistency)
         const queryEmbedding = generateDeterministicEmbedding(photo.path);
 
         let best = { name: 'Unknown', score: 0, face: faces[0] };
@@ -72,18 +71,13 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
         if (best.score >= MATCH_THRESHOLDS.normal) {
           const conf = Math.round(best.score * 100);
           setLastResult(`✅ ${best.name} — ${conf}% match`);
-          
-          // Log to SQLite database
-          const dbService = DatabaseService.getInstance();
-          await dbService.logAttendance(best.face.id, best.name);
-          
           addRecord(best.name, conf, 'ai');
         } else {
           setLastResult(`❌ No match found (best: ${Math.round(best.score * 100)}%)`);
         }
       } else {
         // Demo mode — simulate a random match
-        await handleDemoMatch(faces);
+        handleDemoMatch(faces);
       }
     } catch (e) {
       Logger.error('Scan failed', e);
@@ -93,7 +87,7 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
     }
   };
 
-  const handleDemoMatch = async (faces = FaceStorage.getAllFaces()) => {
+  const handleDemoMatch = (faces = FaceStorage.getAllFaces()) => {
     if (!faces.length) {
       setLastResult('⚠️ No faces registered — go register first');
       return;
@@ -101,15 +95,6 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
     const f = faces[Math.floor(Math.random() * faces.length)];
     const conf = Math.round((0.72 + Math.random() * 0.15) * 100);
     setLastResult(`✅ ${f.name} — ${conf}% (demo)`);
-    
-    try {
-      // Log to SQLite database
-      const dbService = DatabaseService.getInstance();
-      await dbService.logAttendance(f.id, f.name);
-    } catch (err) {
-      Logger.error('Failed to log demo attendance to DB', err);
-    }
-    
     addRecord(f.name, conf, 'demo');
   };
 
@@ -138,7 +123,7 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
           <Text style={s.errTxt}>Front camera not found</Text>
         ) : (
           <>
-            <VisionCamera
+            <Camera
               ref={cameraRef}
               style={StyleSheet.absoluteFill}
               device={device}

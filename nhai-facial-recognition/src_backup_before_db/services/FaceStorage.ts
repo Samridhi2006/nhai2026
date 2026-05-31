@@ -19,16 +19,9 @@ export const ACCURACY_PROFILE = {
   recommendedThreshold: 0.6,
 };
 
-import { DatabaseService } from './DatabaseService';
-import { Logger } from '../utils/logger';
-
 export interface StoredFace {
   id: string;
   name: string;
-  age: number;
-  phone: string;
-  email: string;
-  photoPath: string;
   embedding: Float32Array;
   timestamp: number;
   embeddingHash: string;
@@ -61,52 +54,22 @@ export class FaceStorage {
     if (service.isInitialized) return;
 
     try {
-      // Ensure DatabaseService is initialized first
-      const dbService = DatabaseService.getInstance();
-      await dbService.initialize();
-
-      // Clear cache and load employees from SQLite
+      // Load faces from SQLite (in production)
+      // For now, initialize empty cache
       service.facesCache.clear();
-      const employees = await dbService.getAllEmployees();
-      
-      for (const emp of employees) {
-        try {
-          const rawEmbedding = JSON.parse(emp.embedding);
-          const embedding = new Float32Array(rawEmbedding);
-          
-          service.facesCache.set(emp.id, {
-            id: emp.id,
-            name: emp.name,
-            age: emp.age,
-            phone: emp.phone,
-            email: emp.email,
-            photoPath: emp.photo_path,
-            embedding,
-            timestamp: emp.timestamp,
-            embeddingHash: calculateHash(embedding),
-          });
-        } catch (err) {
-          Logger.error(`Failed to parse embedding for employee: ${emp.id}`, err);
-        }
-      }
-
       service.isInitialized = true;
-      Logger.info(`✓ FaceStorage initialized with ${service.facesCache.size} cache entries`);
+      console.log('FaceStorage initialized');
     } catch (error) {
-      Logger.error('FaceStorage initialization error:', error);
+      console.error('FaceStorage initialization error:', error);
       throw error;
     }
   }
 
   /**
-   * Register a new face with employee details
+   * Register a new face
    */
   static async registerFace(
     name: string,
-    age: number,
-    phone: string,
-    email: string,
-    photoPath: string,
     embedding: Float32Array
   ): Promise<string> {
     const service = FaceStorage.getInstance();
@@ -115,35 +78,24 @@ export class FaceStorage {
     }
 
     const faceId = generateId();
-    const dbService = DatabaseService.getInstance();
-
-    // 1. Save to SQLite database
-    const embeddingString = JSON.stringify(Array.from(embedding));
-    await dbService.insertEmployee({
-      id: faceId,
-      name,
-      age,
-      phone,
-      email,
-      photo_path: photoPath,
-      embedding: embeddingString,
-    });
-
-    // 2. Store in local Map cache for fast in-memory matching
     const face: StoredFace = {
       id: faceId,
       name,
-      age,
-      phone,
-      email,
-      photoPath,
       embedding: embedding.slice(), // Copy embedding
       timestamp: Date.now(),
       embeddingHash: calculateHash(embedding),
     };
+
+    // Store in cache
     service.facesCache.set(faceId, face);
 
-    Logger.info(`✓ Face registered and cached: ${name} (${faceId})`);
+    // In production: also store in encrypted SQLite with:
+    // - AES-256-GCM encrypted embedding
+    // - Encrypted photo (if provided)
+    // - Sync status (pending/synced)
+
+    console.log(`✓ Face registered: ${name} (${faceId})`);
+
     return faceId;
   }
 
@@ -163,7 +115,7 @@ export class FaceStorage {
     let bestMatch: MatchResult | null = null;
     let bestScore = threshold;
 
-    // Compare against all stored faces in memory (highly optimized)
+    // Compare against all stored faces
     for (const face of service.facesCache.values()) {
       const score = cosineSimilarity(queryEmbedding, face.embedding);
 
@@ -188,19 +140,14 @@ export class FaceStorage {
   }
 
   /**
-   * Delete a face and its employee record
+   * Delete a face
    */
   static async deleteFace(faceId: string): Promise<void> {
     const service = FaceStorage.getInstance();
-    const dbService = DatabaseService.getInstance();
-
-    // Delete from SQLite
-    await dbService.deleteEmployee(faceId);
-
-    // Delete from cache
     service.facesCache.delete(faceId);
 
-    Logger.info(`✓ Face and Employee record deleted: ${faceId}`);
+    // In production: also delete from SQLite and add to sync queue
+    console.log(`✓ Face deleted: ${faceId}`);
   }
 
   /**

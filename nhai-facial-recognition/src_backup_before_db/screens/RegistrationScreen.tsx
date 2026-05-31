@@ -8,10 +8,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, TextInput,
-  TouchableOpacity, Alert, ActivityIndicator, ScrollView
+  TouchableOpacity, Alert, ActivityIndicator,
 } from 'react-native';
 import {
-  Camera as VisionCamera, useCameraDevice, useCameraPermission,
+  Camera, useCameraDevice, useCameraPermission,
 } from 'react-native-vision-camera';
 import { FaceStorage } from '../services/FaceStorage';
 import { TFLiteService } from '../services/TFLiteService';
@@ -24,18 +24,13 @@ interface Props {
 
 export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
   const [name, setName] = useState('');
-  const [age, setAge] = useState('');
-  const [phone, setPhone] = useState('');
-  const [email, setEmail] = useState('');
-  const [photoPath, setPhotoPath] = useState<string | null>(null);
-
   const [isProcessing, setIsProcessing] = useState(false);
   const [faceDetected, setFaceDetected] = useState(false);
   const [statusMsg, setStatusMsg] = useState('Point camera at your face then tap Capture');
   const { hasPermission, requestPermission } = useCameraPermission();
   const device = useCameraDevice('front');
   const [cameraActive, setCameraActive] = useState(false);
-  const cameraRef = useRef<any>(null);
+  const cameraRef = useRef<Camera>(null);
   const capturedEmbedding = useRef<Float32Array | null>(null);
   const modelsReady = TFLiteService.modelsAvailable;
 
@@ -56,23 +51,20 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
     setIsProcessing(true);
 
     try {
+      // Take photo FIRST before any state changes that could close the camera
       let embedding: Float32Array;
-      let path = '';
 
       if (modelsReady) {
         const photo = await cameraRef.current.takePhoto({ flash: 'off' });
         Logger.info(`Photo captured: ${photo.path}`);
-        path = photo.path;
         embedding = generateDeterministicEmbedding(photo.path);
       } else {
-        path = 'demo_photo_path';
         embedding = generateRandomEmbedding();
       }
 
       capturedEmbedding.current = embedding;
-      setPhotoPath(path);
       setFaceDetected(true);
-      setStatusMsg('✅ Face captured — enter details and tap Register');
+      setStatusMsg('✅ Face captured — enter name and tap Register');
     } catch (e) {
       Logger.error('Capture failed', e);
       setStatusMsg('❌ Capture failed — try again');
@@ -82,43 +74,26 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
   };
 
   const handleRegister = async () => {
-    if (!name.trim() || !age.trim() || !phone.trim() || !email.trim()) {
-      Alert.alert('Error', 'Please fill in all details');
+    if (!name.trim()) {
+      Alert.alert('Error', 'Please enter a name');
       return;
     }
-    if (!capturedEmbedding.current || !photoPath) {
+    if (!capturedEmbedding.current) {
       Alert.alert('Error', 'Please capture your face first');
-      return;
-    }
-
-    const ageNum = parseInt(age.trim(), 10);
-    if (isNaN(ageNum) || ageNum <= 0) {
-      Alert.alert('Error', 'Please enter a valid age');
       return;
     }
 
     setIsProcessing(true);
     try {
-      const faceId = await FaceStorage.registerFace(
-        name.trim(),
-        ageNum,
-        phone.trim(),
-        email.trim(),
-        photoPath,
-        capturedEmbedding.current
-      );
-      Logger.info(`Registered employee: ${name} (${faceId})`);
+      const faceId = await FaceStorage.registerFace(name.trim(), capturedEmbedding.current);
+      Logger.info(`Registered: ${name} (${faceId})`);
       Alert.alert(
         'Registered ✅',
-        `Employee ID: ${faceId}\n${name} has been registered successfully.`,
+        `${name} has been registered successfully.`,
         [{ text: 'OK', onPress: onSuccess }]
       );
       setName('');
-      setAge('');
-      setPhone('');
-      setEmail('');
       capturedEmbedding.current = null;
-      setPhotoPath(null);
       setFaceDetected(false);
       setStatusMsg('Point camera at your face then tap Capture');
     } catch (e) {
@@ -129,7 +104,7 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
   };
 
   return (
-    <ScrollView contentContainerStyle={s.scrollContainer} style={s.container}>
+    <View style={s.container}>
       <View style={s.card}>
         <Text style={s.title}>Register Face</Text>
         <Text style={s.sub}>
@@ -144,7 +119,7 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
             <Text style={s.errTxt}>Front camera not found</Text>
           ) : (
             <>
-              <VisionCamera
+              <Camera
                 ref={cameraRef}
                 style={StyleSheet.absoluteFill}
                 device={device}
@@ -180,46 +155,15 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
           }
         </TouchableOpacity>
 
-        {/* Inputs */}
+        {/* Name input */}
         <TextInput
           style={s.input}
-          placeholder="Full Name *"
+          placeholder="Enter employee name *"
           placeholderTextColor="#aaa"
           value={name}
           onChangeText={setName}
           editable={!isProcessing}
           autoCapitalize="words"
-        />
-
-        <TextInput
-          style={s.input}
-          placeholder="Age *"
-          placeholderTextColor="#aaa"
-          value={age}
-          onChangeText={setAge}
-          editable={!isProcessing}
-          keyboardType="numeric"
-        />
-
-        <TextInput
-          style={s.input}
-          placeholder="Phone Number *"
-          placeholderTextColor="#aaa"
-          value={phone}
-          onChangeText={setPhone}
-          editable={!isProcessing}
-          keyboardType="phone-pad"
-        />
-
-        <TextInput
-          style={s.input}
-          placeholder="Email Address *"
-          placeholderTextColor="#aaa"
-          value={email}
-          onChangeText={setEmail}
-          editable={!isProcessing}
-          keyboardType="email-address"
-          autoCapitalize="none"
         />
 
         {/* Register button */}
@@ -230,7 +174,7 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
         >
           {isProcessing && faceDetected
             ? <ActivityIndicator color="#fff" />
-            : <Text style={s.btnTxt}>Register Employee ✅</Text>
+            : <Text style={s.btnTxt}>Register Face ✅</Text>
           }
         </TouchableOpacity>
 
@@ -238,7 +182,7 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
           <Text style={s.backTxt}>← Back</Text>
         </TouchableOpacity>
       </View>
-    </ScrollView>
+    </View>
   );
 };
 
@@ -253,6 +197,8 @@ function generateRandomEmbedding(): Float32Array {
 
 /**
  * Generate a deterministic-ish embedding from a photo path.
+ * Each character of the path seeds the values, giving a unique
+ * but reproducible vector per capture session.
  */
 function generateDeterministicEmbedding(seed: string): Float32Array {
   const emb = new Float32Array(128);
@@ -266,8 +212,7 @@ function generateDeterministicEmbedding(seed: string): Float32Array {
 }
 
 const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#eef2f7' },
-  scrollContainer: { paddingVertical: 20, alignItems: 'center', justifyContent: 'center' },
+  container: { flex: 1, backgroundColor: '#eef2f7', justifyContent: 'center', alignItems: 'center' },
   card: { width: '94%', backgroundColor: '#fff', borderRadius: 16, padding: 20, elevation: 6 },
   title: { fontSize: 24, fontWeight: '800', color: '#1a1a2e', marginBottom: 2 },
   sub: { fontSize: 13, color: '#666', marginBottom: 14 },

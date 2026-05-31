@@ -63,23 +63,12 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ onNavigate }) => {
 
         <TouchableOpacity
           style={styles.menuItem}
-          onPress={() => onNavigate('EmployeeDetails')}
+          onPress={() => onNavigate('Verification')}
         >
-          <Text style={styles.menuIcon}>🗂️</Text>
-          <Text style={styles.menuTitle}>Employee Details</Text>
+          <Text style={styles.menuIcon}>🔐</Text>
+          <Text style={styles.menuTitle}>Verify Identity</Text>
           <Text style={styles.menuDescription}>
-            View and manage registered offline personnel
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.menuItem}
-          onPress={() => onNavigate('AttendanceSheet')}
-        >
-          <Text style={styles.menuIcon}>📋</Text>
-          <Text style={styles.menuTitle}>Attendance Sheet</Text>
-          <Text style={styles.menuDescription}>
-            View attendance logs and sync to AWS server
+            Verify against registered faces
           </Text>
         </TouchableOpacity>
       </View>

@@ -10,14 +10,12 @@ import { EncryptionService } from './src/services/EncryptionService';
 import { SyncService } from './src/services/SyncService';
 import { FaceStorage } from './src/services/FaceStorage';
 import { LivenessService } from './src/services/LivenessService';
-import { TFLiteService } from './src/services/TFLiteService';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { RegistrationScreen } from './src/screens/RegistrationScreen';
-import { EmployeeDetailsScreen } from './src/screens/EmployeeDetailsScreen';
+import { VerificationScreen } from './src/screens/VerificationScreen';
 import { AttendanceScreen } from './src/screens/AttendanceScreen';
-import { AttendanceSheetScreen } from './src/screens/AttendanceSheetScreen';
 
-type ScreenName = 'Home' | 'Registration' | 'EmployeeDetails' | 'Attendance' | 'AttendanceSheet';
+type ScreenName = 'Home' | 'Registration' | 'Verification' | 'Attendance';
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<ScreenName>('Home');
@@ -40,10 +38,6 @@ export default function App() {
       // Initialize face storage
       Logger.info('Initializing face storage');
       await FaceStorage.initialize();
-
-      // Initialize TFLite models (non-blocking — app works in demo mode if models missing)
-      Logger.info('Initializing TFLite models');
-      await TFLiteService.initialize();
 
       // Initialize liveness service
       Logger.info('Initializing liveness service');
@@ -78,17 +72,13 @@ export default function App() {
             onBack={() => handleNavigate('Home')}
           />
         );
-      case 'EmployeeDetails':
+      case 'Verification':
         return (
-          <EmployeeDetailsScreen onBack={() => handleNavigate('Home')} />
+          <VerificationScreen onBack={() => handleNavigate('Home')} />
         );
       case 'Attendance':
         return (
           <AttendanceScreen onBack={() => handleNavigate('Home')} />
-        );
-      case 'AttendanceSheet':
-        return (
-          <AttendanceSheetScreen onBack={() => handleNavigate('Home')} />
         );
       default:
         return <HomeScreen onNavigate={handleNavigate} />;
