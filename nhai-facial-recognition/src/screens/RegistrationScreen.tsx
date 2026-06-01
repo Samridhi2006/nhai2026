@@ -16,18 +16,23 @@ import {
 import { FaceStorage } from '../services/FaceStorage';
 import { TFLiteService } from '../services/TFLiteService';
 import { Logger } from '../utils/logger';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 
 interface Props {
   onSuccess: () => void;
   onBack?: () => void;
+  reRegisterId?: string;
 }
 
-export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
+export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack, reRegisterId }) => {
   const [name, setName] = useState('');
   const [age, setAge] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
+  const [designation, setDesignation] = useState('Staff');
   const [photoPath, setPhotoPath] = useState<string | null>(null);
+
+  const DESIGNATIONS = ['Staff', 'Officer', 'Manager', 'Contractor'];
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [faceDetected, setFaceDetected] = useState(false);
@@ -44,6 +49,19 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
       const ok = hasPermission || await requestPermission();
       if (ok) setCameraActive(true);
     })();
+    
+    // Pre-fill form if re-registering
+    if (reRegisterId) {
+      const existing = FaceStorage.getAllFaces().find(f => f.id === reRegisterId);
+      if (existing) {
+        setName(existing.name);
+        setAge(existing.age?.toString() || '');
+        setPhone(existing.phone || '');
+        setEmail(existing.email || '');
+        setDesignation(existing.designation || 'Staff');
+        setStatusMsg('Re-registering: Point camera and tap Capture');
+      }
+    }
   }, []);
 
   const handleCapture = async () => {
@@ -61,9 +79,16 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
 
       if (modelsReady) {
         const photo = await cameraRef.current.takePhoto({ flash: 'off' });
-        Logger.info(`Photo captured: ${photo.path}`);
-        path = photo.path;
-        embedding = generateDeterministicEmbedding(photo.path);
+        Logger.info(`Raw photo captured: ${photo.path}`);
+        
+        const manipResult = await manipulateAsync(
+          photo.path,
+          [],
+          { compress: 1, format: SaveFormat.JPEG }
+        );
+        
+        path = manipResult.uri;
+        embedding = generateDeterministicEmbedding(path);
       } else {
         path = 'demo_photo_path';
         embedding = generateRandomEmbedding();
@@ -99,24 +124,38 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
 
     setIsProcessing(true);
     try {
-      const faceId = await FaceStorage.registerFace(
-        name.trim(),
-        ageNum,
-        phone.trim(),
-        email.trim(),
-        photoPath,
-        capturedEmbedding.current
-      );
-      Logger.info(`Registered employee: ${name} (${faceId})`);
-      Alert.alert(
-        'Registered ✅',
-        `Employee ID: ${faceId}\n${name} has been registered successfully.`,
-        [{ text: 'OK', onPress: onSuccess }]
-      );
+      // Check for duplicate face (bypass if matched face is the one being re-registered)
+      const duplicate = FaceStorage.matchFace(capturedEmbedding.current);
+      if (duplicate && duplicate.face.id !== reRegisterId) {
+        Alert.alert('Error', 'already registered');
+        setIsProcessing(false);
+        return;
+      }
+
+      let faceId = reRegisterId;
+      if (reRegisterId) {
+        await FaceStorage.updateFace(
+          reRegisterId, name.trim(), ageNum, phone.trim(), email.trim(),
+          photoPath, capturedEmbedding.current, designation
+        );
+        Alert.alert('Updated ✅', `Profile for ${name} updated successfully.`, [{ text: 'OK', onPress: onSuccess }]);
+      } else {
+        faceId = await FaceStorage.registerFace(
+          name.trim(), ageNum, phone.trim(), email.trim(),
+          photoPath, capturedEmbedding.current, designation
+        );
+        Logger.info(`Registered employee: ${name} (${faceId})`);
+        Alert.alert(
+          'Registered ✅',
+          `Employee ID: ${faceId}\n${name} has been registered successfully.`,
+          [{ text: 'OK', onPress: onSuccess }]
+        );
+      }
       setName('');
       setAge('');
       setPhone('');
       setEmail('');
+      setDesignation('Staff');
       capturedEmbedding.current = null;
       setPhotoPath(null);
       setFaceDetected(false);
@@ -131,7 +170,7 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
   return (
     <ScrollView contentContainerStyle={s.scrollContainer} style={s.container}>
       <View style={s.card}>
-        <Text style={s.title}>Register Face</Text>
+        <Text style={s.title}>{reRegisterId ? 'Re-Register Face' : 'Register Face'}</Text>
         <Text style={s.sub}>
           {modelsReady ? '🤖 AI Mode' : '⚠️ Demo Mode'}
         </Text>
@@ -223,6 +262,22 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
           autoCapitalize="none"
         />
 
+        <Text style={s.label}>Select Designation:</Text>
+        <View style={s.chipContainer}>
+          {DESIGNATIONS.map((desc) => (
+            <TouchableOpacity
+              key={desc}
+              style={[s.chip, designation === desc && s.chipActive]}
+              onPress={() => setDesignation(desc)}
+              disabled={isProcessing}
+            >
+              <Text style={[s.chipText, designation === desc && s.chipTextActive]}>
+                {desc}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
         {/* Register button */}
         <TouchableOpacity
           style={[s.btn, (!faceDetected || isProcessing) && s.btnDis]}
@@ -301,6 +356,16 @@ const s = StyleSheet.create({
     backgroundColor: '#f5f7fa', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 12,
     fontSize: 15, borderWidth: 1, borderColor: '#e0e0e0', color: '#000', marginBottom: 10,
   },
+  label: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 8, marginTop: 4 },
+  chipContainer: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 16 },
+  chip: {
+    paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20,
+    backgroundColor: '#f0f0f0', marginRight: 8, marginBottom: 8,
+    borderWidth: 1, borderColor: '#e0e0e0'
+  },
+  chipActive: { backgroundColor: '#007AFF', borderColor: '#007AFF' },
+  chipText: { fontSize: 14, color: '#555', fontWeight: '500' },
+  chipTextActive: { color: '#fff' },
   btn: { backgroundColor: '#007AFF', paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginBottom: 10 },
   btnDis: { opacity: 0.4 },
   btnTxt: { color: '#fff', fontSize: 16, fontWeight: '700' },

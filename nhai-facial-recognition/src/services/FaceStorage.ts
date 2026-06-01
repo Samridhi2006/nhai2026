@@ -76,6 +76,32 @@ export class FaceStorage {
     return id;
   }
 
+  static async updateFace(
+    id: string, name: string, age: number, phone: string, email: string,
+    photoPath: string, embedding: Float32Array, designation = 'Staff'
+  ): Promise<void> {
+    const svc = FaceStorage.getInstance();
+    if (!svc.isInitialized) throw new Error('FaceStorage map memory engine not initialized');
+    
+    const existing = svc.facesCache.get(id);
+    if (!existing) throw new Error('Face not found');
+    
+    const empId = existing.employeeId;
+    const db = DatabaseService.getInstance();
+    
+    await db.insertEmployee({
+      id, employee_id: empId, name, designation, age, phone, email,
+      photo_path: photoPath, embedding: JSON.stringify(Array.from(embedding))
+    });
+    
+    svc.facesCache.set(id, {
+      ...existing, name, designation, age, phone, email,
+      photoPath, embedding: embedding.slice(), timestamp: Date.now(),
+    });
+    
+    Logger.info(`Updated workforce: ${name} (${empId})`);
+  }
+
   static matchFace(queryEmbedding: Float32Array, threshold = 0.6): MatchResult | null {
     const svc = FaceStorage.getInstance();
     if (!svc.isInitialized || svc.facesCache.size === 0) return null;

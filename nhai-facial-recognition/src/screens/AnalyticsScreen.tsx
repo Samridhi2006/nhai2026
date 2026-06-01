@@ -87,8 +87,8 @@ export const AnalyticsScreen: React.FC<Props> = ({ onBack }) => {
       
       const topArr: TopAttendee[] = Object.entries(empCounts)
         .map(([id, count]) => {
-          const emp = allEmployees.find(e => e.employee_id === id);
-          return { employeeId: id, name: emp?.name || 'Unknown', count };
+          const emp = allEmployees.find(e => e.id === id || e.employee_id === id);
+          return { employeeId: emp ? emp.employee_id : id, name: emp?.name || 'Unknown', count };
         })
         .sort((a, b) => b.count - a.count)
         .slice(0, 5);

@@ -15,6 +15,7 @@ export interface Employee {
   age: number;
   phone: string;
   email: string;
+  designation: string;
   photo_path: string;
   embedding: string;
   timestamp: number;
@@ -51,6 +52,12 @@ export class DatabaseService {
     try {
       this.db = await SQLite.openDatabaseAsync('nhai_v3.db');
       await this.db.execAsync('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+      try {
+        await this.db.execAsync(`ALTER TABLE attendance ADD COLUMN location_status TEXT;`);
+        await this.db.execAsync(`ALTER TABLE employees ADD COLUMN designation TEXT;`);
+      } catch (e) {
+        // Columns might already exist, ignore.
+      }
       await this.db.execAsync(`
         CREATE TABLE IF NOT EXISTS employees (
           id TEXT PRIMARY KEY,
@@ -80,6 +87,10 @@ export class DatabaseService {
         CREATE INDEX IF NOT EXISTS idx_att_empid ON attendance(employee_id);
         CREATE INDEX IF NOT EXISTS idx_emp_empid ON employees(employee_id);
       `);
+
+      // Clean up any orphaned attendance records left over from before the cascade delete fix
+      await this.db.execAsync('DELETE FROM attendance WHERE employee_id NOT IN (SELECT id FROM employees)');
+
       this.isInitialized = true;
       Logger.info('DatabaseService v3 initialized');
     } catch (e) { Logger.error('DB init failed', e); throw e; }
@@ -122,6 +133,7 @@ export class DatabaseService {
   async deleteEmployee(id: string): Promise<void> {
     if (!this.db) return;
     await this.db.runAsync('DELETE FROM employees WHERE id=?', [id]);
+    await this.db.runAsync('DELETE FROM attendance WHERE employee_id=?', [id]);
   }
 
   async getEmployeeCount(): Promise<number> {
@@ -147,6 +159,12 @@ export class DatabaseService {
       [employeeId, name, ts, lat ?? null, lng ?? null, locStatus ?? 'Unknown', shiftName, status]
     );
     Logger.info(`Attendance: ${name} | ${shiftName} | ${status}`);
+  }
+
+  async markAttendanceAsSynced(ids: number[]): Promise<void> {
+    if (!this.db || ids.length === 0) return;
+    const placeholders = ids.map(() => '?').join(',');
+    await this.db.runAsync(`UPDATE attendance SET synced = 1 WHERE id IN (${placeholders})`, ids);
   }
 
   async getAttendanceLogs(): Promise<AttendanceRecord[]> {

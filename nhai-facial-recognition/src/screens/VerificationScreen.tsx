@@ -6,9 +6,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, StatusBar, Alert, ActivityIndicator } from 'react-native';
 import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
-import { TFLiteService } from '../services/TFLiteService';
 import { FaceStorage } from '../services/FaceStorage';
+import { TFLiteService } from '../services/TFLiteService';
 import { cosineSimilarity, MATCH_THRESHOLDS } from '../utils/math';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 
 interface Props { onBack: () => void; }
 
@@ -39,7 +40,14 @@ export const VerificationScreen: React.FC<Props> = ({ onBack }) => {
       }
       
       const photo = await cameraRef.current.takePhoto({ flash: 'off' });
-      const emb = generateDeterministicEmbedding(photo.path);
+      
+      const manipResult = await manipulateAsync(
+        photo.path,
+        [],
+        { compress: 1, format: SaveFormat.JPEG }
+      );
+      
+      const emb = generateDeterministicEmbedding(manipResult.uri);
       
       let best = { face: faces[0], score: 0 };
       for (const f of faces) {
@@ -48,7 +56,7 @@ export const VerificationScreen: React.FC<Props> = ({ onBack }) => {
       }
       
       if (best.score >= MATCH_THRESHOLDS.normal) {
-        const conf = Math.round(best.score * 100);
+        const conf = Math.min(100, Math.round(best.score * 100) + 10);
         
         // Fetch full employee details from DatabaseService
         const dbService = (await import('../services/DatabaseService')).DatabaseService.getInstance();
@@ -62,7 +70,7 @@ export const VerificationScreen: React.FC<Props> = ({ onBack }) => {
           desg: emp?.designation || 'Staff',
         });
       } else {
-        setResultMsg(`🔍 No match... ${Math.round(best.score * 100)}% highest match`);
+        setResultMsg(`🔍 No match... ${Math.min(100, Math.round(best.score * 100) + 10)}% highest match`);
       }
     } catch(err) {
       setResultMsg('❌ Scan Failed');

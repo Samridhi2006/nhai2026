@@ -11,9 +11,12 @@ import { DatabaseService, Employee } from '../services/DatabaseService';
 import { FaceStorage } from '../services/FaceStorage';
 import { ScreenName } from '../../App';
 
-interface Props { onBack: () => void; }
+interface Props { 
+  onBack: () => void; 
+  onNavigate: (screen: ScreenName, params?: any) => void;
+}
 
-export const RegisteredUsersScreen: React.FC<Props> = ({ onBack }) => {
+export const RegisteredUsersScreen: React.FC<Props> = ({ onBack, onNavigate }) => {
   const [users, setUsers] = useState<Employee[]>([]);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
@@ -76,7 +79,7 @@ export const RegisteredUsersScreen: React.FC<Props> = ({ onBack }) => {
           <View style={s.activeBadge}><Text style={s.activeTxt}>Active</Text></View>
         </View>
         <View style={s.detailActions}>
-          <TouchableOpacity style={s.reregBtn} onPress={() => { setSelected(null); onNavigate('Registration'); }}>
+          <TouchableOpacity style={s.reregBtn} onPress={() => { const id = selected.id; setSelected(null); onNavigate('Registration', { reRegisterId: id }); }}>
             <Text style={s.reregTxt}>Re-Register</Text>
           </TouchableOpacity>
           <TouchableOpacity style={s.delBtn} onPress={() => handleDelete(selected)}>

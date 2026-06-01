@@ -10,6 +10,8 @@ import {
 import { DatabaseService, AttendanceRecord } from '../services/DatabaseService';
 import { SyncService } from '../services/SyncService';
 import { Logger } from '../utils/logger';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 
 interface Props {
   onBack: () => void;
@@ -74,6 +76,35 @@ export const AttendanceSheetScreen: React.FC<Props> = ({ onBack }) => {
     return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
   };
 
+  const handleExportCSV = async () => {
+    if (logs.length === 0) {
+      Alert.alert('Empty', 'No attendance logs to export.');
+      return;
+    }
+    
+    try {
+      const header = 'ID,Employee ID,Name,Time,Latitude,Longitude,Location Status,Shift,Status,Synced\\n';
+      const rows = logs.map(log => {
+        const d = new Date(log.timestamp);
+        const timeStr = `${d.toLocaleDateString()} ${d.toLocaleTimeString()}`;
+        return `${log.id},${log.employee_id},"${log.name}","${timeStr}",${log.latitude || ''},${log.longitude || ''},${log.location_status},${log.shift_name},${log.status},${log.synced === 1 ? 'Yes' : 'No'}`;
+      }).join('\\n');
+      
+      const fileUri = FileSystem.documentDirectory + 'attendance_export.csv';
+      await FileSystem.writeAsStringAsync(fileUri, header + rows, { encoding: FileSystem.EncodingType.UTF8 });
+      
+      const isAvailable = await Sharing.isAvailableAsync();
+      if (isAvailable) {
+        await Sharing.shareAsync(fileUri, { mimeType: 'text/csv', dialogTitle: 'Export Attendance' });
+      } else {
+        Alert.alert('Error', 'Sharing is not available on this device');
+      }
+    } catch (e) {
+      Logger.error('CSV Export failed', e);
+      Alert.alert('Error', 'Failed to export CSV file');
+    }
+  };
+
   const renderItem = ({ item }: { item: AttendanceRecord }) => {
     return (
       <View style={s.logItem}>
@@ -131,6 +162,11 @@ export const AttendanceSheetScreen: React.FC<Props> = ({ onBack }) => {
         </TouchableOpacity>
       )}
 
+      {/* Export CSV Button */}
+      <TouchableOpacity style={s.exportBtn} onPress={handleExportCSV}>
+        <Text style={s.exportBtnTxt}>📄 Export to CSV</Text>
+      </TouchableOpacity>
+
       {loading ? (
         <View style={s.center}>
           <ActivityIndicator size="large" color="#007AFF" />
@@ -174,6 +210,11 @@ const s = StyleSheet.create({
     alignItems: 'center', marginBottom: 12, flexDirection: 'row', justifyContent: 'center'
   },
   syncBtnTxt: { color: '#fff', fontSize: 14, fontWeight: '700' },
+  exportBtn: {
+    backgroundColor: '#34C759', paddingVertical: 12, borderRadius: 10,
+    alignItems: 'center', marginBottom: 16, flexDirection: 'row', justifyContent: 'center'
+  },
+  exportBtnTxt: { color: '#fff', fontSize: 14, fontWeight: '700' },
   btnDisabled: { opacity: 0.7 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingTxt: { marginTop: 10, color: '#666', fontSize: 14 },
