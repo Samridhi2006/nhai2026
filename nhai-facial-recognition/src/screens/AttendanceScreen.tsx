@@ -89,9 +89,7 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
             const dist = haversineDistance(lat, lng, SITE_COORDS.latitude, SITE_COORDS.longitude);
             if (dist > MAX_RADIUS_METERS) {
               locStatus = 'Outside';
-              setLastResult(`❌ Outside Geofence (${Math.round(dist)}m away). Cannot mark attendance.`);
-              setScanning(false);
-              return;
+              setLastResult(`⚠️ Outside geofence (${Math.round(dist)}m). Marked with boundary flag.`);
             } else {
               locStatus = 'Inside';
             }
@@ -142,9 +140,7 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
       const dist = haversineDistance(lat, lng, SITE_COORDS.latitude, SITE_COORDS.longitude);
       if (dist > MAX_RADIUS_METERS) {
         locStatus = 'Outside';
-        setLastResult(`❌ Outside Geofence (${Math.round(dist)}m away). Cannot mark attendance.`);
-        setScanning(false);
-        return;
+        setLastResult(`⚠️ Outside geofence (${Math.round(dist)}m). Marked with boundary flag.`);
       } else {
         locStatus = 'Inside';
       }

@@ -1,43 +1,24 @@
 /**
- * FaceStorage - Local Face Database & Matching
- * Handles face registration, storage, and cosine similarity matching
+ * FaceStorage - In-memory cache backed by DatabaseService SQLite
  */
 
 import { cosineSimilarity, batchCosineSimilarity, MATCH_THRESHOLDS } from '../utils/math';
-
-// Re-export for backward compatibility
-export { cosineSimilarity, batchCosineSimilarity, MATCH_THRESHOLDS };
-
-/**
- * MobileFaceNet INT8 accuracy profile
- */
-export const ACCURACY_PROFILE = {
-  model: 'MobileFaceNet INT8',
-  lfwAccuracy: 0.98,
-  falseAcceptanceRate: 0.001, // 0.1% at threshold 0.6
-  falseRejectionRate: 0.05, // 5% at threshold 0.6
-  recommendedThreshold: 0.6,
-};
-
 import { DatabaseService } from './DatabaseService';
 import { Logger } from '../utils/logger';
 
-export interface StoredFace {
-  id: string;
-  name: string;
-  age: number;
-  phone: string;
-  email: string;
-  photoPath: string;
-  embedding: Float32Array;
-  timestamp: number;
-  embeddingHash: string;
-}
+export { cosineSimilarity, batchCosineSimilarity, MATCH_THRESHOLDS };
 
-export interface MatchResult {
-  face: StoredFace;
-  score: number; // [0, 1] cosine similarity
+export const ACCURACY_PROFILE = {
+  model: 'MobileFaceNet INT8', lfwAccuracy: 0.98,
+  falseAcceptanceRate: 0.001, falseRejectionRate: 0.05, recommendedThreshold: 0.6,
+};
+
+export interface StoredFace {
+  id: string; name: string; employeeId: string; designation: string;
+  age: number; phone: string; email: string; photoPath: string;
+  embedding: Float32Array; timestamp: number;
 }
+export interface MatchResult { face: StoredFace; score: number; }
 
 export class FaceStorage {
   private static instance: FaceStorage;
@@ -47,188 +28,76 @@ export class FaceStorage {
   private constructor() {}
 
   static getInstance(): FaceStorage {
-    if (!FaceStorage.instance) {
-      FaceStorage.instance = new FaceStorage();
-    }
+    if (!FaceStorage.instance) FaceStorage.instance = new FaceStorage();
     return FaceStorage.instance;
   }
 
-  /**
-   * Initialize storage (load faces from database)
-   */
   static async initialize(): Promise<void> {
-    const service = FaceStorage.getInstance();
-    if (service.isInitialized) return;
-
-    try {
-      // Ensure DatabaseService is initialized first
-      const dbService = DatabaseService.getInstance();
-      await dbService.initialize();
-
-      // Clear cache and load employees from SQLite
-      service.facesCache.clear();
-      const employees = await dbService.getAllEmployees();
-      
-      for (const emp of employees) {
-        try {
-          const rawEmbedding = JSON.parse(emp.embedding);
-          const embedding = new Float32Array(rawEmbedding);
-          
-          service.facesCache.set(emp.id, {
-            id: emp.id,
-            name: emp.name,
-            age: emp.age,
-            phone: emp.phone,
-            email: emp.email,
-            photoPath: emp.photo_path,
-            embedding,
-            timestamp: emp.timestamp,
-            embeddingHash: calculateHash(embedding),
-          });
-        } catch (err) {
-          Logger.error(`Failed to parse embedding for employee: ${emp.id}`, err);
-        }
-      }
-
-      service.isInitialized = true;
-      Logger.info(`✓ FaceStorage initialized with ${service.facesCache.size} cache entries`);
-    } catch (error) {
-      Logger.error('FaceStorage initialization error:', error);
-      throw error;
+    const svc = FaceStorage.getInstance();
+    if (svc.isInitialized) return;
+    const db = DatabaseService.getInstance();
+    await db.initialize();
+    svc.facesCache.clear();
+    const employees = await db.getAllEmployees();
+    for (const emp of employees) {
+      try {
+        const embedding = new Float32Array(JSON.parse(emp.embedding || '[]'));
+        svc.facesCache.set(emp.id, {
+          id: emp.id, name: emp.name, employeeId: emp.employee_id,
+          designation: emp.designation, age: emp.age, phone: emp.phone,
+          email: emp.email, photoPath: emp.photo_path,
+          embedding, timestamp: emp.timestamp,
+        });
+      } catch (e) { Logger.error(`Bad embedding for employee registry object: ${emp.id}`, e); }
     }
+    svc.isInitialized = true;
+    Logger.info(`FaceStorage: ${svc.facesCache.size} faces successfully loaded into memory cache`);
   }
 
-  /**
-   * Register a new face with employee details
-   */
   static async registerFace(
-    name: string,
-    age: number,
-    phone: string,
-    email: string,
-    photoPath: string,
-    embedding: Float32Array
+    name: string, age: number, phone: string, email: string,
+    photoPath: string, embedding: Float32Array,
+    designation = 'Staff'
   ): Promise<string> {
-    const service = FaceStorage.getInstance();
-    if (!service.isInitialized) {
-      throw new Error('FaceStorage not initialized');
-    }
-
-    const faceId = generateId();
-    const dbService = DatabaseService.getInstance();
-
-    // 1. Save to SQLite database
-    const embeddingString = JSON.stringify(Array.from(embedding));
-    await dbService.insertEmployee({
-      id: faceId,
-      name,
-      age,
-      phone,
-      email,
-      photo_path: photoPath,
-      embedding: embeddingString,
+    const svc = FaceStorage.getInstance();
+    if (!svc.isInitialized) throw new Error('FaceStorage map memory engine not initialized');
+    const id = `face_${Date.now()}_${Math.random().toString(36).substr(2,8)}`;
+    const empId = `NHAI${Date.now().toString().slice(-6)}`;
+    const db = DatabaseService.getInstance();
+    await db.insertEmployee({
+      id, employee_id: empId, name, designation, age, phone, email,
+      photo_path: photoPath, embedding: JSON.stringify(Array.from(embedding)), timestamp: Date.now(),
     });
-
-    // 2. Store in local Map cache for fast in-memory matching
-    const face: StoredFace = {
-      id: faceId,
-      name,
-      age,
-      phone,
-      email,
-      photoPath,
-      embedding: embedding.slice(), // Copy embedding
-      timestamp: Date.now(),
-      embeddingHash: calculateHash(embedding),
-    };
-    service.facesCache.set(faceId, face);
-
-    Logger.info(`✓ Face registered and cached: ${name} (${faceId})`);
-    return faceId;
+    svc.facesCache.set(id, {
+      id, name, employeeId: empId, designation, age, phone, email,
+      photoPath, embedding: embedding.slice(), timestamp: Date.now(),
+    });
+    Logger.info(`Registered workforce: ${name} (${empId})`);
+    return id;
   }
 
-  /**
-   * Match face embedding against database
-   * Returns best match if similarity > threshold
-   */
-  static matchFace(
-    queryEmbedding: Float32Array,
-    threshold: number = 0.6
-  ): MatchResult | null {
-    const service = FaceStorage.getInstance();
-    if (!service.isInitialized || service.facesCache.size === 0) {
-      return null;
-    }
-
-    let bestMatch: MatchResult | null = null;
+  static matchFace(queryEmbedding: Float32Array, threshold = 0.6): MatchResult | null {
+    const svc = FaceStorage.getInstance();
+    if (!svc.isInitialized || svc.facesCache.size === 0) return null;
+    let best: MatchResult | null = null;
     let bestScore = threshold;
-
-    // Compare against all stored faces in memory (highly optimized)
-    for (const face of service.facesCache.values()) {
+    for (const face of svc.facesCache.values()) {
       const score = cosineSimilarity(queryEmbedding, face.embedding);
-
-      if (score > bestScore) {
-        bestScore = score;
-        bestMatch = {
-          face,
-          score,
-        };
-      }
+      if (score > bestScore) { bestScore = score; best = { face, score }; }
     }
-
-    return bestMatch;
+    return best;
   }
 
-  /**
-   * Get all registered faces
-   */
-  static getAllFaces(): StoredFace[] {
-    const service = FaceStorage.getInstance();
-    return Array.from(service.facesCache.values());
+  static getAllFaces(): StoredFace[] { return Array.from(FaceStorage.getInstance().facesCache.values()); }
+
+  static async deleteFace(id: string): Promise<void> {
+    const svc = FaceStorage.getInstance();
+    await DatabaseService.getInstance().deleteEmployee(id);
+    svc.facesCache.delete(id);
   }
 
-  /**
-   * Delete a face and its employee record
-   */
-  static async deleteFace(faceId: string): Promise<void> {
-    const service = FaceStorage.getInstance();
-    const dbService = DatabaseService.getInstance();
-
-    // Delete from SQLite
-    await dbService.deleteEmployee(faceId);
-
-    // Delete from cache
-    service.facesCache.delete(faceId);
-
-    Logger.info(`✓ Face and Employee record deleted: ${faceId}`);
-  }
-
-  /**
-   * Get face statistics
-   */
   static getStats() {
-    const service = FaceStorage.getInstance();
-    return {
-      totalFaces: service.facesCache.size,
-      isInitialized: service.isInitialized,
-      cacheSize: service.facesCache.size,
-    };
+    const svc = FaceStorage.getInstance();
+    return { totalFaces: svc.facesCache.size, isInitialized: svc.isInitialized };
   }
-}
-
-// Utility functions
-function generateId(): string {
-  // Simple UUID-like ID generation
-  return `face_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-}
-
-function calculateHash(embedding: Float32Array): string {
-  // Simple hash for embedding
-  let hash = 0;
-  for (let i = 0; i < Math.min(embedding.length, 32); i++) {
-    const char = Math.floor(embedding[i] * 100) % 256;
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32-bit integer
-  }
-  return Math.abs(hash).toString(16);
 }

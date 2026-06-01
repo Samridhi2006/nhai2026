@@ -98,7 +98,7 @@ export default function App() {
       case 'Verification':
         return <VerificationScreen onBack={() => handleNavigate('Home')} />;
       case 'RegisteredUsers':
-        return <RegisteredUsersScreen onBack={() => handleNavigate('Home')} />;
+        return <RegisteredUsersScreen onBack={() => handleNavigate('Home')} onNavigate={handleNavigate} />;
       default:
         return <HomeScreen onNavigate={handleNavigate} />;
     }
