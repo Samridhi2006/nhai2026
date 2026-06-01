@@ -149,6 +149,7 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
                 style={StyleSheet.absoluteFill}
                 device={device}
                 isActive={cameraActive}
+                // @ts-expect-error photo prop is valid but missing in types
                 photo={true}
                 pixelFormat="yuv"
               />

@@ -4,14 +4,14 @@
  * ✅ Updated for react-native-fast-tflite v3 (Nitro Modules) API
  */
 
-import { loadTensorflowModel, TfliteModel } from 'react-native-fast-tflite';
+import { loadTensorflowModel, TensorflowModel } from 'react-native-fast-tflite';
 import { Logger } from '../utils/logger';
 
 export class TFLiteService {
   private static instance: TFLiteService;
-  private _blazeFaceModel: TfliteModel | null = null;
-  private _mobileFaceNetModel: TfliteModel | null = null;
-  private _blinkDetectorModel: TfliteModel | null = null;
+  private _blazeFaceModel: TensorflowModel | null = null;
+  private _mobileFaceNetModel: TensorflowModel | null = null;
+  private _blinkDetectorModel: TensorflowModel | null = null;
   private isInitialized = false;
   private _modelsAvailable = false;
 
@@ -32,7 +32,7 @@ export class TFLiteService {
   /**
    * Get the BlazeFace model (for frame processor)
    */
-  get blazeFaceModel(): TfliteModel | null {
+  get blazeFaceModel(): TensorflowModel | null {
     return this._blazeFaceModel;
   }
 
@@ -50,8 +50,7 @@ export class TFLiteService {
       // 1. Load BlazeFace Face Detection Model
       try {
         service._blazeFaceModel = await loadTensorflowModel(
-          require('../../assets/models/blazeface.tflite'),
-          [] // Explicitly pass empty delegate array for CPU fallback in v3
+          require('../../assets/models/blazeface.tflite')
         );
         Logger.info('BlazeFace model loaded successfully.');
       } catch (e) {
@@ -61,8 +60,7 @@ export class TFLiteService {
       // 2. Load MobileFaceNet Embedding Model
       try {
         service._mobileFaceNetModel = await loadTensorflowModel(
-          require('../../assets/models/mobilefacenet_int8.tflite'),
-          []
+          require('../../assets/models/mobilefacenet_int8.tflite')
         );
         Logger.info('MobileFaceNet INT8 model loaded successfully.');
       } catch (e) {
@@ -72,8 +70,7 @@ export class TFLiteService {
       // 3. Load Blink Detector Liveness Model
       try {
         service._blinkDetectorModel = await loadTensorflowModel(
-          require('../../assets/models/blink_detector.tflite'),
-          []
+          require('../../assets/models/blink_detector.tflite')
         );
         Logger.info('Blink detector model loaded successfully.');
       } catch (e) {

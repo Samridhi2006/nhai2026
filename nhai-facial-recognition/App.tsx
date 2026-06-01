@@ -16,8 +16,11 @@ import { RegistrationScreen } from './src/screens/RegistrationScreen';
 import { EmployeeDetailsScreen } from './src/screens/EmployeeDetailsScreen';
 import { AttendanceScreen } from './src/screens/AttendanceScreen';
 import { AttendanceSheetScreen } from './src/screens/AttendanceSheetScreen';
+import { AnalyticsScreen } from './src/screens/AnalyticsScreen';
+import { VerificationScreen } from './src/screens/VerificationScreen';
+import { RegisteredUsersScreen } from './src/screens/RegisteredUsersScreen';
 
-type ScreenName = 'Home' | 'Registration' | 'EmployeeDetails' | 'Attendance' | 'AttendanceSheet';
+export type ScreenName = 'Home' | 'Registration' | 'EmployeeDetails' | 'Attendance' | 'AttendanceSheet' | 'Analytics' | 'Verification' | 'RegisteredUsers';
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<ScreenName>('Home');
@@ -90,6 +93,12 @@ export default function App() {
         return (
           <AttendanceSheetScreen onBack={() => handleNavigate('Home')} />
         );
+      case 'Analytics':
+        return <AnalyticsScreen onBack={() => handleNavigate('Home')} />;
+      case 'Verification':
+        return <VerificationScreen onBack={() => handleNavigate('Home')} />;
+      case 'RegisteredUsers':
+        return <RegisteredUsersScreen onBack={() => handleNavigate('Home')} />;
       default:
         return <HomeScreen onNavigate={handleNavigate} />;
     }

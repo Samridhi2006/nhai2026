@@ -126,8 +126,19 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
     <View style={s.container}>
       {/* Header */}
       <View style={s.header}>
-        <Text style={s.title}>Mark Attendance</Text>
+        <View style={s.headerTop}>
+          <TouchableOpacity onPress={onBack}><Text style={s.backTxt}>← Back</Text></TouchableOpacity>
+        </View>
+        <Text style={s.title}>Take Attendance</Text>
         <Text style={s.sub}>{modelsReady ? '🤖 AI Active' : '⚠️ Demo Mode'}</Text>
+      </View>
+
+      {/* GEOLOCATION INFORMATION BANNER */}
+      <View style={{ paddingHorizontal: 14, paddingTop: 10 }}>
+        <View style={s.alertBanner}>
+          <Text style={s.alertTitle}>📍 Geolocation Active</Text>
+          <Text style={s.alertBody}>Attendance is dynamically GPS-tagged. Workers must be within 500m of site boundaries for automated entry approvals.</Text>
+        </View>
       </View>
 
       {/* Camera preview */}
@@ -143,6 +154,7 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
               style={StyleSheet.absoluteFill}
               device={device}
               isActive={cameraActive}
+              // @ts-expect-error photo prop is valid but missing in types
               photo={true}
               pixelFormat="yuv"
             />
@@ -263,4 +275,9 @@ const s = StyleSheet.create({
   rowName: { fontSize: 15, fontWeight: '700', color: '#1a1a2e' },
   rowMeta: { fontSize: 11, color: '#999', marginTop: 2 },
   rowConf: { fontSize: 20, fontWeight: '700', color: '#4CAF50' },
+  alertBanner: { backgroundColor: '#EFF6FF', borderLeftWidth: 4, borderLeftColor: '#3b82f6', padding: 12, borderRadius: 8, marginBottom: 4 },
+  alertTitle: { fontSize: 13, fontWeight: '700', color: '#1E40AF', marginBottom: 2 },
+  alertBody: { fontSize: 11, color: '#1E40AF', lineHeight: 15 },
+  headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  backTxt: { color: '#cce4ff', fontSize: 14, fontWeight: '500' },
 });
