@@ -67,10 +67,9 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
         const photo = await cameraRef.current.takePhoto({ flash: 'off' });
         Logger.info(`Raw photo captured: ${photo.path}`);
         
-        // Fix Android front-camera orientation
         const manipResult = await manipulateAsync(
           photo.path,
-          [{ rotate: 90 }],
+          [],
           { compress: 0.8, format: SaveFormat.JPEG }
         );
         

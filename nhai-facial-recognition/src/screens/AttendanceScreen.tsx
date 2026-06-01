@@ -18,6 +18,7 @@ import { TFLiteService } from '../services/TFLiteService';
 import { DatabaseService } from '../services/DatabaseService';
 import { cosineSimilarity, haversineDistance, MATCH_THRESHOLDS } from '../utils/math';
 import { Logger } from '../utils/logger';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 
 // TARGET GEOFENCE (Defaulting to NHAI HQ New Delhi)
 const SITE_COORDS = { latitude: 28.5839, longitude: 77.0422 }; // Example coordinates
@@ -67,8 +68,14 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
         const photo = await cameraRef.current.takePhoto({ flash: 'off' });
         Logger.info(`Scan photo: ${photo.path}`);
 
+        const manipResult = await manipulateAsync(
+          photo.path,
+          [],
+          { compress: 0.8, format: SaveFormat.JPEG }
+        );
+
         // Generate embedding from photo
-        const queryEmbedding = generateDeterministicEmbedding(photo.path);
+        const queryEmbedding = generateDeterministicEmbedding(manipResult.uri);
 
         let best = { name: 'Unknown', score: 0, face: faces[0] };
         for (const f of faces) {

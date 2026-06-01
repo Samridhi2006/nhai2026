@@ -6,9 +6,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, StatusBar, Alert, ActivityIndicator } from 'react-native';
 import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
-import { TFLiteService } from '../services/TFLiteService';
 import { FaceStorage } from '../services/FaceStorage';
+import { TFLiteService } from '../services/TFLiteService';
 import { cosineSimilarity, MATCH_THRESHOLDS } from '../utils/math';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 
 interface Props { onBack: () => void; }
 
@@ -39,7 +40,14 @@ export const VerificationScreen: React.FC<Props> = ({ onBack }) => {
       }
       
       const photo = await cameraRef.current.takePhoto({ flash: 'off' });
-      const emb = generateDeterministicEmbedding(photo.path);
+      
+      const manipResult = await manipulateAsync(
+        photo.path,
+        [],
+        { compress: 0.8, format: SaveFormat.JPEG }
+      );
+      
+      const emb = generateDeterministicEmbedding(manipResult.uri);
       
       let best = { face: faces[0], score: 0 };
       for (const f of faces) {
