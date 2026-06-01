@@ -42,18 +42,20 @@ export const HomeScreen: React.FC<Props> = ({ onNavigate }) => {
       const days = 7;
       const now = new Date();
       now.setHours(0,0,0,0);
+      
+      const toLocalYMD = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
       const start = now.getTime() - (days - 1) * 86400000;
       
       const statsMap = new Map<string, Set<string>>();
       for (const r of allLogs.filter(l => l.timestamp >= start)) {
-        const d = new Date(r.timestamp).toISOString().split('T')[0];
+        const d = toLocalYMD(new Date(r.timestamp));
         if (!statsMap.has(d)) statsMap.set(d, new Set());
         statsMap.get(d)!.add(r.employee_id);
       }
       
       const wData = [];
       for (let i = days - 1; i >= 0; i--) {
-        const d = new Date(now.getTime() - i * 86400000).toISOString().split('T')[0];
+        const d = toLocalYMD(new Date(now.getTime() - i * 86400000));
         wData.push({ date: d, count: statsMap.get(d)?.size || 0 });
       }
       setWeeklyData(wData);

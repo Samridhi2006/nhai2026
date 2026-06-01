@@ -61,20 +61,22 @@ export const AnalyticsScreen: React.FC<Props> = ({ onBack }) => {
 
       setShifts([{ shiftName: 'General Shift', count: uniqueToday }]);
 
+      const toLocalYMD = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
       const daily: DailyStat[] = [];
       const periodStart = now.getTime() - (period - 1) * 86400000;
       const statsMap = new Map<string, { total: Set<string>, late: Set<string> }>();
       
       for (const l of allLogs.filter(log => log.timestamp >= periodStart)) {
         const dObj = new Date(l.timestamp);
-        const dStr = dObj.toISOString().split('T')[0];
+        const dStr = toLocalYMD(dObj);
         if (!statsMap.has(dStr)) statsMap.set(dStr, { total: new Set(), late: new Set() });
         statsMap.get(dStr)!.total.add(l.employee_id);
         if (dObj.getHours() >= 10) statsMap.get(dStr)!.late.add(l.employee_id);
       }
 
       for (let i = period - 1; i >= 0; i--) {
-        const d = new Date(now.getTime() - i * 86400000).toISOString().split('T')[0];
+        const d = toLocalYMD(new Date(now.getTime() - i * 86400000));
         const val = statsMap.get(d);
         daily.push({ date: d, count: val?.total.size || 0, lateCount: val?.late.size || 0 });
       }
