@@ -23,6 +23,9 @@ export interface AttendanceRecord {
   name: string;
   timestamp: number;
   synced: number; // 0 = Pending, 1 = Synced
+  latitude?: number;
+  longitude?: number;
+  location_status?: string;
 }
 
 export class DatabaseService {
@@ -73,9 +76,20 @@ export class DatabaseService {
           employee_id TEXT NOT NULL,
           name TEXT NOT NULL,
           timestamp INTEGER NOT NULL,
-          synced INTEGER DEFAULT 0
+          synced INTEGER DEFAULT 0,
+          latitude REAL,
+          longitude REAL,
+          location_status TEXT
         );
       `);
+      
+      try {
+        await this.db.execAsync(`ALTER TABLE attendance ADD COLUMN latitude REAL;`);
+        await this.db.execAsync(`ALTER TABLE attendance ADD COLUMN longitude REAL;`);
+        await this.db.execAsync(`ALTER TABLE attendance ADD COLUMN location_status TEXT;`);
+      } catch (e) {
+        // Columns might already exist, ignore.
+      }
 
       this.isInitialized = true;
       Logger.info('✓ SQLite Database and tables initialized successfully');
@@ -156,17 +170,17 @@ export class DatabaseService {
   /**
    * Log a new attendance record
    */
-  async logAttendance(employeeId: string, name: string): Promise<void> {
+  async logAttendance(employeeId: string, name: string, lat?: number, lng?: number, locStatus?: string): Promise<void> {
     if (!this.isInitialized || !this.db) {
       throw new Error('Database not initialized');
     }
 
     const timestamp = Date.now();
     await this.db.runAsync(
-      `INSERT INTO attendance (employee_id, name, timestamp, synced) VALUES (?, ?, ?, 0);`,
-      [employeeId, name, timestamp]
+      `INSERT INTO attendance (employee_id, name, timestamp, synced, latitude, longitude, location_status) VALUES (?, ?, ?, 0, ?, ?, ?);`,
+      [employeeId, name, timestamp, lat || null, lng || null, locStatus || null]
     );
-    Logger.info(`Attendance logged for: ${name} (${employeeId})`);
+    Logger.info(`Attendance logged for: ${name} (${employeeId}) [Loc: ${locStatus}]`);
   }
 
   /**

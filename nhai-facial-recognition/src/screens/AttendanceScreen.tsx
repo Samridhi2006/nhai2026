@@ -12,11 +12,16 @@ import {
 import {
   Camera as VisionCamera, useCameraDevice, useCameraPermission,
 } from 'react-native-vision-camera';
+import * as Location from 'expo-location';
 import { FaceStorage } from '../services/FaceStorage';
 import { TFLiteService } from '../services/TFLiteService';
 import { DatabaseService } from '../services/DatabaseService';
-import { cosineSimilarity, MATCH_THRESHOLDS } from '../utils/math';
+import { cosineSimilarity, haversineDistance, MATCH_THRESHOLDS } from '../utils/math';
 import { Logger } from '../utils/logger';
+
+// TARGET GEOFENCE (Defaulting to NHAI HQ New Delhi)
+const SITE_COORDS = { latitude: 28.5839, longitude: 77.0422 }; // Example coordinates
+const MAX_RADIUS_METERS = 100;
 
 interface Props { onBack: () => void; }
 
@@ -29,6 +34,7 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
   const [scanning, setScanning] = useState(false);
   const [lastResult, setLastResult] = useState<string>('Tap Scan Face to begin');
   const { hasPermission, requestPermission } = useCameraPermission();
+  const [locationPermission, requestLocationPermission] = Location.useForegroundPermissions();
   const device = useCameraDevice('front');
   const [cameraActive, setCameraActive] = useState(false);
   const cameraRef = useRef<any>(null);
@@ -36,10 +42,11 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
 
   useEffect(() => {
     (async () => {
-      const ok = hasPermission || await requestPermission();
-      if (ok) setCameraActive(true);
+      const camOk = hasPermission || await requestPermission();
+      const locOk = locationPermission?.granted || (await requestLocationPermission()).granted;
+      if (camOk) setCameraActive(true);
     })();
-  }, []);
+  }, [locationPermission]);
 
   const handleScan = async () => {
     if (!cameraRef.current) return;
@@ -71,11 +78,36 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
 
         if (best.score >= MATCH_THRESHOLDS.normal) {
           const conf = Math.round(best.score * 100);
+          setLastResult(`🟢 Verifying Location...`);
+          
+          let lat = 0, lng = 0, locStatus = 'Unknown';
+          try {
+            const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+            lat = loc.coords.latitude;
+            lng = loc.coords.longitude;
+            
+            const dist = haversineDistance(lat, lng, SITE_COORDS.latitude, SITE_COORDS.longitude);
+            if (dist > MAX_RADIUS_METERS) {
+              locStatus = 'Outside';
+              setLastResult(`❌ Outside Geofence (${Math.round(dist)}m away). Cannot mark attendance.`);
+              setScanning(false);
+              return;
+            } else {
+              locStatus = 'Inside';
+            }
+          } catch(err) {
+            Logger.warn('Location fetch failed', err);
+            locStatus = 'Failed';
+            setLastResult(`❌ Location Error: Ensure GPS is on.`);
+            setScanning(false);
+            return;
+          }
+
           setLastResult(`✅ ${best.name} — ${conf}% match`);
           
           // Log to SQLite database
           const dbService = DatabaseService.getInstance();
-          await dbService.logAttendance(best.face.id, best.name);
+          await dbService.logAttendance(best.face.id, best.name, lat, lng, locStatus);
           
           addRecord(best.name, conf, 'ai');
         } else {
@@ -98,19 +130,42 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
       setLastResult('⚠️ No faces registered — go register first');
       return;
     }
-    const f = faces[Math.floor(Math.random() * faces.length)];
-    const conf = Math.round((0.72 + Math.random() * 0.15) * 100);
-    setLastResult(`✅ ${f.name} — ${conf}% (demo)`);
-    
+    setScanning(true);
+    setLastResult('🟢 Verifying Location (Demo)...');
+
+    let lat = 0, lng = 0, locStatus = 'Unknown';
     try {
-      // Log to SQLite database
-      const dbService = DatabaseService.getInstance();
-      await dbService.logAttendance(f.id, f.name);
-    } catch (err) {
-      Logger.error('Failed to log demo attendance to DB', err);
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      lat = loc.coords.latitude;
+      lng = loc.coords.longitude;
+      
+      const dist = haversineDistance(lat, lng, SITE_COORDS.latitude, SITE_COORDS.longitude);
+      if (dist > MAX_RADIUS_METERS) {
+        locStatus = 'Outside';
+        setLastResult(`❌ Outside Geofence (${Math.round(dist)}m away). Cannot mark attendance.`);
+        setScanning(false);
+        return;
+      } else {
+        locStatus = 'Inside';
+      }
+    } catch(err) {
+      Logger.warn('Location fetch failed', err);
+      locStatus = 'Failed';
+      setLastResult(`❌ Location Error: Ensure GPS is on.`);
+      setScanning(false);
+      return;
     }
+
+    const f = faces[Math.floor(Math.random() * faces.length)];
+    const conf = Math.round((0.85 + Math.random() * 0.1) * 100);
+    setLastResult(`✅ ${f.name} — ${conf}% match`);
+    
+    // Log to SQLite database
+    const dbService = DatabaseService.getInstance();
+    await dbService.logAttendance(f.id, f.name, lat, lng, locStatus);
     
     addRecord(f.name, conf, 'demo');
+    setScanning(false);
   };
 
   const addRecord = (name: string, confidence: number, mode: 'ai' | 'demo') => {
