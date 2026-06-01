@@ -49,8 +49,7 @@ export const AnalyticsScreen: React.FC<Props> = ({ onBack }) => {
       
       let lateCount = 0;
       todayLogs.forEach(l => {
-        const d = new Date(l.timestamp);
-        if (d.getHours() >= 10) lateCount++;
+        if ((l.status as string) === 'Late') lateCount++;
       });
       
       setTotalUsers(allEmployees.length);
@@ -59,7 +58,13 @@ export const AnalyticsScreen: React.FC<Props> = ({ onBack }) => {
       setLateToday(lateCount);
       setOnTimeToday(Math.max(0, uniqueToday - lateCount));
 
-      setShifts([{ shiftName: 'General Shift', count: uniqueToday }]);
+      const shiftMap = new Map();
+      todayLogs.forEach(l => {
+        const sn = (l as any).shift_name || 'General Shift';
+        shiftMap.set(sn, (shiftMap.get(sn) || 0) + 1);
+      });
+      const shiftArr = Array.from(shiftMap.entries()).map(([shiftName, count]) => ({ shiftName, count }));
+      setShifts(shiftArr.length > 0 ? shiftArr : [{ shiftName: 'General Shift', count: uniqueToday }]);
 
       const toLocalYMD = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
@@ -72,7 +77,7 @@ export const AnalyticsScreen: React.FC<Props> = ({ onBack }) => {
         const dStr = toLocalYMD(dObj);
         if (!statsMap.has(dStr)) statsMap.set(dStr, { total: new Set(), late: new Set() });
         statsMap.get(dStr)!.total.add(l.employee_id);
-        if (dObj.getHours() >= 10) statsMap.get(dStr)!.late.add(l.employee_id);
+        if ((l.status as string) === 'Late') statsMap.get(dStr)!.late.add(l.employee_id);
       }
 
       for (let i = period - 1; i >= 0; i--) {

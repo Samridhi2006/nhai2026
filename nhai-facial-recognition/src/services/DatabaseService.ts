@@ -15,7 +15,6 @@ export interface Employee {
   age: number;
   phone: string;
   email: string;
-  designation: string;
   photo_path: string;
   embedding: string;
   timestamp: number;
