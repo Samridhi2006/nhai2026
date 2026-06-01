@@ -11,9 +11,12 @@ import { DatabaseService, Employee } from '../services/DatabaseService';
 import { FaceStorage } from '../services/FaceStorage';
 import { ScreenName } from '../../App';
 
-interface Props { onBack: () => void; }
+interface Props { 
+  onBack: () => void; 
+  onNavigate: (screen: ScreenName) => void;
+}
 
-export const RegisteredUsersScreen: React.FC<Props> = ({ onBack }) => {
+export const RegisteredUsersScreen: React.FC<Props> = ({ onBack, onNavigate }) => {
   const [users, setUsers] = useState<Employee[]>([]);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);

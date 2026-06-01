@@ -16,6 +16,7 @@ import {
 import { FaceStorage } from '../services/FaceStorage';
 import { TFLiteService } from '../services/TFLiteService';
 import { Logger } from '../utils/logger';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 
 interface Props {
   onSuccess: () => void;
@@ -27,7 +28,10 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
   const [age, setAge] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
+  const [designation, setDesignation] = useState('Staff');
   const [photoPath, setPhotoPath] = useState<string | null>(null);
+
+  const DESIGNATIONS = ['Staff', 'Officer', 'Manager', 'Contractor'];
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [faceDetected, setFaceDetected] = useState(false);
@@ -61,9 +65,17 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
 
       if (modelsReady) {
         const photo = await cameraRef.current.takePhoto({ flash: 'off' });
-        Logger.info(`Photo captured: ${photo.path}`);
-        path = photo.path;
-        embedding = generateDeterministicEmbedding(photo.path);
+        Logger.info(`Raw photo captured: ${photo.path}`);
+        
+        // Fix Android front-camera orientation (rotates 270 degrees)
+        const manipResult = await manipulateAsync(
+          photo.path,
+          [{ rotate: 270 }],
+          { compress: 0.8, format: SaveFormat.JPEG }
+        );
+        
+        path = manipResult.uri;
+        embedding = generateDeterministicEmbedding(path);
       } else {
         path = 'demo_photo_path';
         embedding = generateRandomEmbedding();
@@ -105,7 +117,8 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
         phone.trim(),
         email.trim(),
         photoPath,
-        capturedEmbedding.current
+        capturedEmbedding.current,
+        designation
       );
       Logger.info(`Registered employee: ${name} (${faceId})`);
       Alert.alert(
@@ -117,6 +130,7 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
       setAge('');
       setPhone('');
       setEmail('');
+      setDesignation('Staff');
       capturedEmbedding.current = null;
       setPhotoPath(null);
       setFaceDetected(false);
@@ -223,6 +237,22 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
           autoCapitalize="none"
         />
 
+        <Text style={s.label}>Select Designation:</Text>
+        <View style={s.chipContainer}>
+          {DESIGNATIONS.map((desc) => (
+            <TouchableOpacity
+              key={desc}
+              style={[s.chip, designation === desc && s.chipActive]}
+              onPress={() => setDesignation(desc)}
+              disabled={isProcessing}
+            >
+              <Text style={[s.chipText, designation === desc && s.chipTextActive]}>
+                {desc}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
         {/* Register button */}
         <TouchableOpacity
           style={[s.btn, (!faceDetected || isProcessing) && s.btnDis]}
@@ -301,6 +331,16 @@ const s = StyleSheet.create({
     backgroundColor: '#f5f7fa', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 12,
     fontSize: 15, borderWidth: 1, borderColor: '#e0e0e0', color: '#000', marginBottom: 10,
   },
+  label: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 8, marginTop: 4 },
+  chipContainer: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 16 },
+  chip: {
+    paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20,
+    backgroundColor: '#f0f0f0', marginRight: 8, marginBottom: 8,
+    borderWidth: 1, borderColor: '#e0e0e0'
+  },
+  chipActive: { backgroundColor: '#007AFF', borderColor: '#007AFF' },
+  chipText: { fontSize: 14, color: '#555', fontWeight: '500' },
+  chipTextActive: { color: '#fff' },
   btn: { backgroundColor: '#007AFF', paddingVertical: 14, borderRadius: 10, alignItems: 'center', marginBottom: 10 },
   btnDis: { opacity: 0.4 },
   btnTxt: { color: '#fff', fontSize: 16, fontWeight: '700' },
