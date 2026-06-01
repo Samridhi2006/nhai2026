@@ -67,10 +67,10 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
         const photo = await cameraRef.current.takePhoto({ flash: 'off' });
         Logger.info(`Raw photo captured: ${photo.path}`);
         
-        // Fix Android front-camera orientation (rotates 270 degrees)
+        // Fix Android front-camera orientation
         const manipResult = await manipulateAsync(
           photo.path,
-          [{ rotate: 270 }],
+          [{ rotate: 90 }],
           { compress: 0.8, format: SaveFormat.JPEG }
         );
         
@@ -111,6 +111,14 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
 
     setIsProcessing(true);
     try {
+      // Check for duplicate face
+      const duplicate = FaceStorage.matchFace(capturedEmbedding.current);
+      if (duplicate) {
+        Alert.alert('Error', 'already registered');
+        setIsProcessing(false);
+        return;
+      }
+
       const faceId = await FaceStorage.registerFace(
         name.trim(),
         ageNum,

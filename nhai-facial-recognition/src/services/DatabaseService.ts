@@ -87,6 +87,10 @@ export class DatabaseService {
         CREATE INDEX IF NOT EXISTS idx_att_empid ON attendance(employee_id);
         CREATE INDEX IF NOT EXISTS idx_emp_empid ON employees(employee_id);
       `);
+
+      // Clean up any orphaned attendance records left over from before the cascade delete fix
+      await this.db.execAsync('DELETE FROM attendance WHERE employee_id NOT IN (SELECT id FROM employees)');
+
       this.isInitialized = true;
       Logger.info('DatabaseService v3 initialized');
     } catch (e) { Logger.error('DB init failed', e); throw e; }
@@ -129,6 +133,7 @@ export class DatabaseService {
   async deleteEmployee(id: string): Promise<void> {
     if (!this.db) return;
     await this.db.runAsync('DELETE FROM employees WHERE id=?', [id]);
+    await this.db.runAsync('DELETE FROM attendance WHERE employee_id=?', [id]);
   }
 
   async getEmployeeCount(): Promise<number> {
