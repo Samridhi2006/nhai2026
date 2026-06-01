@@ -21,9 +21,10 @@ import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 interface Props {
   onSuccess: () => void;
   onBack?: () => void;
+  reRegisterId?: string;
 }
 
-export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
+export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack, reRegisterId }) => {
   const [name, setName] = useState('');
   const [age, setAge] = useState('');
   const [phone, setPhone] = useState('');
@@ -48,6 +49,19 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
       const ok = hasPermission || await requestPermission();
       if (ok) setCameraActive(true);
     })();
+    
+    // Pre-fill form if re-registering
+    if (reRegisterId) {
+      const existing = FaceStorage.getAllFaces().find(f => f.id === reRegisterId);
+      if (existing) {
+        setName(existing.name);
+        setAge(existing.age?.toString() || '');
+        setPhone(existing.phone || '');
+        setEmail(existing.email || '');
+        setDesignation(existing.designation || 'Staff');
+        setStatusMsg('Re-registering: Point camera and tap Capture');
+      }
+    }
   }, []);
 
   const handleCapture = async () => {
@@ -70,7 +84,7 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
         const manipResult = await manipulateAsync(
           photo.path,
           [],
-          { compress: 0.8, format: SaveFormat.JPEG }
+          { compress: 1, format: SaveFormat.JPEG }
         );
         
         path = manipResult.uri;
@@ -110,29 +124,33 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
 
     setIsProcessing(true);
     try {
-      // Check for duplicate face
+      // Check for duplicate face (bypass if matched face is the one being re-registered)
       const duplicate = FaceStorage.matchFace(capturedEmbedding.current);
-      if (duplicate) {
+      if (duplicate && duplicate.face.id !== reRegisterId) {
         Alert.alert('Error', 'already registered');
         setIsProcessing(false);
         return;
       }
 
-      const faceId = await FaceStorage.registerFace(
-        name.trim(),
-        ageNum,
-        phone.trim(),
-        email.trim(),
-        photoPath,
-        capturedEmbedding.current,
-        designation
-      );
-      Logger.info(`Registered employee: ${name} (${faceId})`);
-      Alert.alert(
-        'Registered ✅',
-        `Employee ID: ${faceId}\n${name} has been registered successfully.`,
-        [{ text: 'OK', onPress: onSuccess }]
-      );
+      let faceId = reRegisterId;
+      if (reRegisterId) {
+        await FaceStorage.updateFace(
+          reRegisterId, name.trim(), ageNum, phone.trim(), email.trim(),
+          photoPath, capturedEmbedding.current, designation
+        );
+        Alert.alert('Updated ✅', `Profile for ${name} updated successfully.`, [{ text: 'OK', onPress: onSuccess }]);
+      } else {
+        faceId = await FaceStorage.registerFace(
+          name.trim(), ageNum, phone.trim(), email.trim(),
+          photoPath, capturedEmbedding.current, designation
+        );
+        Logger.info(`Registered employee: ${name} (${faceId})`);
+        Alert.alert(
+          'Registered ✅',
+          `Employee ID: ${faceId}\n${name} has been registered successfully.`,
+          [{ text: 'OK', onPress: onSuccess }]
+        );
+      }
       setName('');
       setAge('');
       setPhone('');
@@ -152,7 +170,7 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack }) => {
   return (
     <ScrollView contentContainerStyle={s.scrollContainer} style={s.container}>
       <View style={s.card}>
-        <Text style={s.title}>Register Face</Text>
+        <Text style={s.title}>{reRegisterId ? 'Re-Register Face' : 'Register Face'}</Text>
         <Text style={s.sub}>
           {modelsReady ? '🤖 AI Mode' : '⚠️ Demo Mode'}
         </Text>

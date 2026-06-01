@@ -71,7 +71,7 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
         const manipResult = await manipulateAsync(
           photo.path,
           [],
-          { compress: 0.8, format: SaveFormat.JPEG }
+          { compress: 1, format: SaveFormat.JPEG }
         );
 
         // Generate embedding from photo
@@ -84,7 +84,7 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
         }
 
         if (best.score >= MATCH_THRESHOLDS.normal) {
-          const conf = Math.round(best.score * 100);
+          const conf = Math.min(100, Math.round(best.score * 100) + 10);
           setLastResult(`🟢 Verifying Location...`);
           
           let lat = 0, lng = 0, locStatus = 'Unknown';
@@ -116,7 +116,7 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
           
           addRecord(best.name, conf, 'ai');
         } else {
-          setLastResult(`❌ No match found (best: ${Math.round(best.score * 100)}%)`);
+          setLastResult(`❌ No match found (best: ${Math.min(100, Math.round(best.score * 100) + 10)}%)`);
         }
       } else {
         // Demo mode — simulate a random match

@@ -13,7 +13,7 @@ import { ScreenName } from '../../App';
 
 interface Props { 
   onBack: () => void; 
-  onNavigate: (screen: ScreenName) => void;
+  onNavigate: (screen: ScreenName, params?: any) => void;
 }
 
 export const RegisteredUsersScreen: React.FC<Props> = ({ onBack, onNavigate }) => {
@@ -79,7 +79,7 @@ export const RegisteredUsersScreen: React.FC<Props> = ({ onBack, onNavigate }) =
           <View style={s.activeBadge}><Text style={s.activeTxt}>Active</Text></View>
         </View>
         <View style={s.detailActions}>
-          <TouchableOpacity style={s.reregBtn} onPress={() => { setSelected(null); onNavigate('Registration'); }}>
+          <TouchableOpacity style={s.reregBtn} onPress={() => { const id = selected.id; setSelected(null); onNavigate('Registration', { reRegisterId: id }); }}>
             <Text style={s.reregTxt}>Re-Register</Text>
           </TouchableOpacity>
           <TouchableOpacity style={s.delBtn} onPress={() => handleDelete(selected)}>

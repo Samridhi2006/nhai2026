@@ -26,6 +26,7 @@ export default function App() {
   const [currentScreen, setCurrentScreen] = useState<ScreenName>('Home');
   const [isInitialized, setIsInitialized] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
+  const [navParams, setNavParams] = useState<any>(null);
 
   useEffect(() => {
     initializeApp();
@@ -66,8 +67,9 @@ export default function App() {
     }
   };
 
-  const handleNavigate = (screen: ScreenName) => {
+  const handleNavigate = (screen: ScreenName, params?: any) => {
     setCurrentScreen(screen);
+    setNavParams(params || null);
   };
 
   const renderScreen = () => {
@@ -79,6 +81,7 @@ export default function App() {
           <RegistrationScreen
             onSuccess={() => handleNavigate('Home')}
             onBack={() => handleNavigate('Home')}
+            reRegisterId={navParams?.reRegisterId}
           />
         );
       case 'EmployeeDetails':

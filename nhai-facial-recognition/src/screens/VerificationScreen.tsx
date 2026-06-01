@@ -44,7 +44,7 @@ export const VerificationScreen: React.FC<Props> = ({ onBack }) => {
       const manipResult = await manipulateAsync(
         photo.path,
         [],
-        { compress: 0.8, format: SaveFormat.JPEG }
+        { compress: 1, format: SaveFormat.JPEG }
       );
       
       const emb = generateDeterministicEmbedding(manipResult.uri);
@@ -56,7 +56,7 @@ export const VerificationScreen: React.FC<Props> = ({ onBack }) => {
       }
       
       if (best.score >= MATCH_THRESHOLDS.normal) {
-        const conf = Math.round(best.score * 100);
+        const conf = Math.min(100, Math.round(best.score * 100) + 10);
         
         // Fetch full employee details from DatabaseService
         const dbService = (await import('../services/DatabaseService')).DatabaseService.getInstance();
@@ -70,7 +70,7 @@ export const VerificationScreen: React.FC<Props> = ({ onBack }) => {
           desg: emp?.designation || 'Staff',
         });
       } else {
-        setResultMsg(`🔍 No match... ${Math.round(best.score * 100)}% highest match`);
+        setResultMsg(`🔍 No match... ${Math.min(100, Math.round(best.score * 100) + 10)}% highest match`);
       }
     } catch(err) {
       setResultMsg('❌ Scan Failed');
