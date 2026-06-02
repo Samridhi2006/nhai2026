@@ -44,10 +44,10 @@ export const VerificationScreen: React.FC<Props> = ({ onBack }) => {
       }
       
       const photo = await cameraRef.current.takePhoto({ flash: 'off' });
-      photoPath = photo.path;
+      photoPath = photo.path.startsWith('file://') ? photo.path : `file://${photo.path}`;
       
       const manipResult = await manipulateAsync(
-        photo.path,
+        photoPath,
         [],
         { compress: 1, format: SaveFormat.JPEG }
       );

@@ -105,10 +105,13 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack, reRegis
         rawPhotoPath = photo.path;
         Logger.info(`[REGISTRATION] Raw photo captured: ${photo.path}`);
         
-        // Step 2: Resize to 112×112 for MobileFaceNet
+        // Step 2: Ensure path has file:// scheme
+        const validPath = photo.path.startsWith('file://') ? photo.path : `file://${photo.path}`;
+        
+        // Pass the raw, un-squashed, high-res photo to the Geometric Auto-Cropper
         const manipResult = await manipulateAsync(
-          photo.path,
-          [{ resize: { width: 112, height: 112 } }],
+          validPath,
+          [], // Do not resize here! Let EmbeddingService crop from the center first, then resize.
           { compress: 0.9, format: SaveFormat.JPEG }
         );
         manipulatedPath = manipResult.uri;

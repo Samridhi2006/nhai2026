@@ -89,16 +89,7 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
       if (!ch || ch.passed || ch.expired) { stopFrameLoop(); return; }
       if (!cameraRef.current) return;
 
-      let photoPath: string | null = null;
-
       try {
-        // Capture low-res snapshot for liveness evaluation
-        const photo = await cameraRef.current.takePhoto({ 
-          flash: 'off', 
-          qualityPrioritization: 'speed' 
-        });
-        photoPath = photo.path;
-
         // For snapshot-based approach, use simulated landmarks
         // Real face detection requires ArrayBuffer from frame processor
         const simLm = buildSimulatedLandmarks(ch.direction);
@@ -118,19 +109,6 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
         }
       } catch (e) {
         Logger.warn('Frame loop error', e);
-      } finally {
-        // ✅ FIX #2: BULLETPROOF CLEANUP - Delete temp file ONLY after all processing
-        // This prevents race conditions where file is deleted while TFLite is still reading
-        if (photoPath) {
-          try {
-            // Allow 50ms buffer for any pending native operations to complete
-            await new Promise(resolve => setTimeout(resolve, 50));
-            // Note: Vision Camera auto-manages cache, but we can force cleanup if needed
-            // await FileSystem.deleteAsync(photoPath, { idempotent: true });
-          } catch (cleanupError) {
-            Logger.warn('Cache cleanup warning', cleanupError);
-          }
-        }
       }
     }, 100); 
   }, [modelsReady]);
@@ -168,9 +146,9 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
         try {
           // ✅ FIX #2: Track photo path for cleanup
           const photo = await cameraRef.current.takePhoto({ flash: 'off' });
-          photoPath = photo.path;
+          photoPath = photo.path.startsWith('file://') ? photo.path : `file://${photo.path}`;
           
-          const manip = await manipulateAsync(photo.path, [], { compress: 1, format: SaveFormat.JPEG });
+          const manip = await manipulateAsync(photoPath, [], { compress: 1, format: SaveFormat.JPEG });
           
           // Extract real embedding from actual image pixels
           const qEmb = await EmbeddingService.extractEmbeddingFromPath(manip.uri);
