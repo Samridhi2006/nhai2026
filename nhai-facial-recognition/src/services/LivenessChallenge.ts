@@ -43,7 +43,7 @@
 
 // ─── Public Types ─────────────────────────────────────────────────────────────
 
-export type ChallengeDirection = 'LEFT' | 'RIGHT' | 'UP';
+export type ChallengeDirection = 'LEFT' | 'RIGHT' | 'UP' | 'DOWN';
 
 export interface FaceLandmarks {
   /** Nose tip pixel position */
@@ -74,13 +74,16 @@ export interface LivenessChallengState {
 // ─── Threshold Constants (tweak here) ────────────────────────────────────────
 
 /** Yaw ratio: face turned enough to the LEFT when below this value */
-const YAW_LEFT_MAX   = 0.35;   // decrease for stricter left detection
+const YAW_LEFT_MAX   = 0.38;   // decrease for stricter left detection
 
 /** Yaw ratio: face turned enough to the RIGHT when above this value */
-const YAW_RIGHT_MIN  = 0.65;   // increase for stricter right detection
+const YAW_RIGHT_MIN  = 0.62;   // increase for stricter right detection
 
 /** Pitch ratio: face tilted enough UPWARD when below this value */
-const PITCH_UP_MAX   = 0.30;   // decrease for stricter up detection
+const PITCH_UP_MAX   = 0.35;   // decrease for stricter up detection
+
+/** Pitch ratio: face tilted enough DOWNWARD when above this value */
+const PITCH_DOWN_MIN = 0.45;   // increase for stricter down detection
 
 /** Consecutive "in-threshold" frames before ChallengePassed = true */
 const HOLD_FRAMES    = 8;
@@ -90,12 +93,13 @@ const TIMEOUT_MS     = 10_000;
 
 // ─── Challenge Directions & Prompts ──────────────────────────────────────────
 
-const DIRECTIONS: ChallengeDirection[] = ['LEFT', 'RIGHT', 'UP'];
+const DIRECTIONS: ChallengeDirection[] = ['LEFT', 'RIGHT', 'UP', 'DOWN'];
 
 const PROMPTS: Record<ChallengeDirection, string> = {
   LEFT:  'Turn your head slightly to the Left',
   RIGHT: 'Turn your head slightly to the Right',
   UP:    'Tilt your head slightly Up',
+  DOWN:  'Tilt your head slightly Down',
 };
 
 // ─── Core Engine ─────────────────────────────────────────────────────────────
@@ -260,6 +264,38 @@ export const LivenessChallenge = {
       faceBottom: { x: xmin + width/2, y: ymin + height },
       eyeCentre:  { x: (rightEye.x + leftEye.x) / 2, y: (rightEye.y + leftEye.y) / 2 },
     };
+  },
+
+  /**
+   * 1-SHOT POSE VERIFICATION
+   * Evaluates if a single static snapshot satisfies the challenge direction.
+   */
+  evaluateSinglePose(
+    direction: ChallengeDirection,
+    detection: {
+      boundingBox: { xmin:number; ymin:number; width:number; height:number };
+      landmarks: { x:number; y:number }[];
+      confidence: number;
+    }
+  ): boolean {
+    const landmarks = this.fromFaceDetection(detection);
+    
+    const faceWidth  = landmarks.faceRight.x  - landmarks.faceLeft.x;
+    const faceHeight = landmarks.faceBottom.y - landmarks.faceTop.y;
+    if (faceWidth <= 0 || faceHeight <= 0) return false;
+
+    const yawRatio   = (landmarks.noseTip.x - landmarks.faceLeft.x) / faceWidth;
+    const pitchRatio = (landmarks.noseTip.y - landmarks.eyeCentre.y) / faceHeight;
+
+    console.log(`[Liveness] Direction: ${direction} | Yaw: ${yawRatio.toFixed(3)} | Pitch: ${pitchRatio.toFixed(3)}`);
+
+    switch (direction) {
+      case 'LEFT':  return yawRatio < YAW_LEFT_MAX;
+      case 'RIGHT': return yawRatio > YAW_RIGHT_MIN;
+      case 'UP':    return pitchRatio < PITCH_UP_MAX;
+      case 'DOWN':  return pitchRatio > PITCH_DOWN_MIN;
+      default:      return false;
+    }
   },
 
   /** Human-readable progress string for the UI progress bar */

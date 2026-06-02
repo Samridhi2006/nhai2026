@@ -40,6 +40,7 @@ interface Props { onBack: () => void; }
 type ScanPhase =
   | 'IDLE'        
   | 'CHALLENGE'   
+  | 'IDENTITY_PROMPT'
   | 'RECOGNISING' 
   | 'DONE';       
 
@@ -54,6 +55,7 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
   const [logs, setLogs]             = useState<LogEntry[]>([]);
   const [challenge, setChallenge]   = useState<LivenessChallengState | null>(null);
   const [progressPct, setProgressPct] = useState(0);
+  const [tempEmbedding, setTempEmbedding] = useState<Float32Array | null>(null);
 
   const { hasPermission, requestPermission } = useCameraPermission();
   const [locPerm, requestLocPerm] = Location.useForegroundPermissions();
@@ -69,7 +71,6 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
       if (!hasPermission) await requestPermission();
       if (!locPerm?.granted) await requestLocPerm();
     })();
-    return () => stopFrameLoop();
   }, []);
 
   useEffect(() => { challengeRef.current = challenge; }, [challenge]);
@@ -82,41 +83,6 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
     }).start();
   }, [progressPct]);
 
-  const startFrameLoop = useCallback(() => {
-    stopFrameLoop();
-    frameLoopRef.current = setInterval(async () => {
-      const ch = challengeRef.current;
-      if (!ch || ch.passed || ch.expired) { stopFrameLoop(); return; }
-      if (!cameraRef.current) return;
-
-      try {
-        // For snapshot-based approach, use simulated landmarks
-        // Real face detection requires ArrayBuffer from frame processor
-        const simLm = buildSimulatedLandmarks(ch.direction);
-        const updated = LivenessChallenge.evaluateFrame({ ...ch }, simLm);
-
-        setChallenge(updated);
-        setProgressPct(Math.round(LivenessChallenge.progressFraction(updated) * 100));
-
-        if (updated.expired) {
-          stopFrameLoop();
-          setPhase('IDLE');
-          setLastResult('⏱ Challenge timed out — tap Scan to try again');
-        } else if (updated.passed) {
-          stopFrameLoop();
-          setPhase('RECOGNISING');
-          await runRecognition();
-        }
-      } catch (e) {
-        Logger.warn('Frame loop error', e);
-      }
-    }, 100); 
-  }, [modelsReady]);
-
-  const stopFrameLoop = () => {
-    if (frameLoopRef.current) { clearInterval(frameLoopRef.current); frameLoopRef.current = null; }
-  };
-
   const handleStartScan = () => {
     if (phase !== 'IDLE') return;
     if (!FaceStorage.getAllFaces().length) {
@@ -127,12 +93,81 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
     setProgressPct(0);
     setPhase('CHALLENGE');
     setLastResult(`👁 ${ch.prompt}`);
-    startFrameLoop();
+    
+    setTimeout(() => {
+      setPhase(p => {
+        if (p === 'CHALLENGE') {
+          setLastResult('⏱ Challenge timed out — try again');
+          return 'IDLE';
+        }
+        return p;
+      });
+    }, 10000);
   };
 
-  // eslint-disable-next-line complexity
-  const runRecognition = async () => {
-    setLastResult('🔍 Identifying face...');
+  const handleCapturePose = async () => {
+    if (phase !== 'CHALLENGE' || !challenge) return;
+    setPhase('RECOGNISING');
+    setLastResult('🔍 Verifying Pose...');
+    
+    let photoPath: string | null = null;
+    try {
+      if (!cameraRef.current) return;
+      const photo = await cameraRef.current.takePhoto({ flash: 'off' });
+      photoPath = photo.path.startsWith('file://') ? photo.path : `file://${photo.path}`;
+      
+      // 1. Verify Liveness Pose
+      const detection = await EmbeddingService.detectFaceFromPath(photoPath);
+      if (!detection) {
+        setLastResult('❌ Face not detected clearly');
+        setPhase('IDLE');
+        return;
+      }
+      
+      const passed = LivenessChallenge.evaluateSinglePose(challenge.direction, detection);
+      if (!passed) {
+        // Recalculate to show in UI
+        const lm = LivenessChallenge.fromFaceDetection(detection);
+        const fw = lm.faceRight.x - lm.faceLeft.x;
+        const fh = lm.faceBottom.y - lm.faceTop.y;
+        const yaw = fw > 0 ? ((lm.noseTip.x - lm.faceLeft.x) / fw).toFixed(2) : '0';
+        const pitch = fh > 0 ? ((lm.noseTip.y - lm.eyeCentre.y) / fh).toFixed(2) : '0';
+        
+        setLastResult(`❌ Spoof: Did not ${challenge.prompt} (Y:${yaw}, P:${pitch})`);
+        setPhase('IDLE');
+        return;
+      }
+      
+      setLastResult('✅ Liveness passed! Extracting temp profile...');
+
+      // 2. Extract Temp Identity from the Liveness photo
+      if (modelsReady) {
+        const manip = await manipulateAsync(photoPath, [], { compress: 1, format: SaveFormat.JPEG });
+        const tempEmb = await EmbeddingService.extractEmbeddingFromPath(manip.uri);
+        setTempEmbedding(tempEmb);
+      }
+      
+      setPhase('IDENTITY_PROMPT');
+      setLastResult('✅ Passed! Please look straight ahead.');
+      
+      // Auto-trigger Identity capture after a short delay for good UX
+      setTimeout(() => {
+        setPhase(p => p === 'IDENTITY_PROMPT' ? 'RECOGNISING' : p);
+        if (phase !== 'IDLE') {
+          handleCaptureIdentity();
+        }
+      }, 1500);
+      
+    } catch (e) {
+      Logger.error('Liveness capture failed', e);
+      setLastResult(`❌ Error: ${(e as Error).message}`);
+      setPhase('IDLE');
+    }
+  };
+
+  const handleCaptureIdentity = async () => {
+    setPhase('RECOGNISING');
+    setLastResult('🔍 Capturing Identity...');
     let photoPath: string | null = null;
     
     try {
@@ -143,39 +178,43 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
       let matchConf   = 0;
 
       if (modelsReady && cameraRef.current) {
-        try {
-          // ✅ FIX #2: Track photo path for cleanup
-          const photo = await cameraRef.current.takePhoto({ flash: 'off' });
-          photoPath = photo.path.startsWith('file://') ? photo.path : `file://${photo.path}`;
-          
-          const manip = await manipulateAsync(photoPath, [], { compress: 1, format: SaveFormat.JPEG });
-          
-          // Extract real embedding from actual image pixels
-          const qEmb = await EmbeddingService.extractEmbeddingFromPath(manip.uri);
-          
-          // Compare against all registered faces
-          for (const f of faces) {
-            const score = cosineSimilarity(qEmb, f.embedding);
-            if (score > matchConf) { matchConf = score; matchedFace = f; }
+        const photo = await cameraRef.current.takePhoto({ flash: 'off' });
+        photoPath = photo.path.startsWith('file://') ? photo.path : `file://${photo.path}`;
+        
+        const manip = await manipulateAsync(photoPath, [], { compress: 1, format: SaveFormat.JPEG });
+        const finalEmb = await EmbeddingService.extractEmbeddingFromPath(manip.uri);
+        
+        // 🔒 ANTI-SPOOF CROSS-CHECK (Bait-and-Switch Prevention)
+        if (tempEmbedding) {
+          const spoofScore = cosineSimilarity(finalEmb, tempEmbedding);
+          // Even a side profile should have a >0.4 similarity to the straight photo of the SAME person
+          if (spoofScore < 0.4) {
+            setLastResult('🚨 Spoof Detected! Face swapped during capture.');
+            setPhase('IDLE');
+            setTempEmbedding(null);
+            return;
           }
-          Logger.info(`Face matching: best score ${matchConf.toFixed(3)}, threshold ${MATCH_THRESHOLDS.normal}`);
-        } catch (embError) {
-          Logger.warn('Embedding extraction failed, falling back to demo', embError);
-          // Fallback: random selection in demo mode
-          matchedFace = faces[Math.floor(Math.random() * faces.length)];
-          matchConf = 0.87 + Math.random() * 0.08;
         }
+        
+        // Match against database with STRICT threshold (since this is a straight photo)
+        for (const f of faces) {
+          const score = cosineSimilarity(finalEmb, f.embedding);
+          if (score > matchConf) { matchConf = score; matchedFace = f; }
+        }
+        
+        Logger.info(`Face matching: best score ${matchConf.toFixed(3)}, threshold ${MATCH_THRESHOLDS.strict}`);
       } else {
-        // Demo mode: random selection
+        // Demo mode
         matchedFace = faces[Math.floor(Math.random() * faces.length)];
         matchConf   = 0.87 + Math.random() * 0.08;
       }
 
       const conf = Math.min(99, Math.round(matchConf * 100));
 
-      if (matchConf < MATCH_THRESHOLDS.normal && modelsReady) {
+      if (matchConf < MATCH_THRESHOLDS.strict && modelsReady) {
         setLastResult(`❌ No match found (${conf}%)`);
         setPhase('IDLE');
+        setTempEmbedding(null);
         return;
       }
 
@@ -188,7 +227,6 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
         const dist = haversineDistance(lat, lng, SITE_COORDS.latitude, SITE_COORDS.longitude);
         locStatus = dist > MAX_RADIUS_M ? 'Outside' : 'Inside';
       } catch (locError) {
-        Logger.warn('GPS location failed', locError);
         locStatus = 'GPS_Unavailable';
       }
 
@@ -198,9 +236,9 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
         matchedFace.id, matchedFace.name, lat, lng, locStatus
       );
 
-      const resultMsg = `✅ ${matchedFace.name} — ${conf}% | ${punct.message}`;
-      setLastResult(resultMsg);
+      setLastResult(`✅ ${matchedFace.name} — ${conf}% | ${punct.message}`);
       setPhase('DONE');
+      setTempEmbedding(null);
 
       setLogs(prev => [{
         id: `${matchedFace.id}${Date.now()}`,
@@ -214,23 +252,14 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
 
       setTimeout(() => { setPhase('IDLE'); setLastResult('Tap Scan Face to begin'); }, 3000);
     } catch (e) {
-      Logger.error('Recognition failed', e);
+      Logger.error('Identity capture failed', e);
       setLastResult(`❌ Error: ${(e as Error).message}`);
       setPhase('IDLE');
-    } finally {
-      // ✅ FIX #2: BULLETPROOF CLEANUP - Delete temp file ONLY after all processing
-      if (photoPath) {
-        try {
-          // Allow 50ms buffer for any pending native operations to complete
-          await new Promise(resolve => setTimeout(resolve, 50));
-          // Note: Vision Camera auto-manages cache, but we can force cleanup if needed
-          // await FileSystem.deleteAsync(photoPath, { idempotent: true });
-        } catch (cleanupError) {
-          Logger.warn('Cache cleanup warning', cleanupError);
-        }
-      }
+      setTempEmbedding(null);
     }
   };
+
+
 
   const registeredCount = FaceStorage.getAllFaces().length;
 
@@ -239,6 +268,7 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
       case 'LEFT':  return '⬅️';
       case 'RIGHT': return '➡️';
       case 'UP':    return '⬆️';
+      case 'DOWN':  return '⬇️';
     }
   };
 
@@ -302,14 +332,16 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
         <TouchableOpacity
           style={[s.scanBtn,
             phase === 'CHALLENGE'   && s.scanBtnChallenge,
+            phase === 'IDENTITY_PROMPT' && s.scanBtnRecognising,
             phase === 'RECOGNISING' && s.scanBtnRecognising,
             phase === 'DONE'        && s.scanBtnDone,
           ]}
-          onPress={phase === 'IDLE' ? handleStartScan : undefined}
-          disabled={phase !== 'IDLE'}
+          onPress={phase === 'IDLE' ? handleStartScan : phase === 'CHALLENGE' ? handleCapturePose : undefined}
+          disabled={phase === 'RECOGNISING' || phase === 'DONE' || phase === 'IDENTITY_PROMPT'}
         >
           {phase === 'IDLE'        && <Text style={s.scanBtnTxt}>📸 Scan Face</Text>}
-          {phase === 'CHALLENGE'   && <ActivityIndicator color="#fff"/>}
+          {phase === 'CHALLENGE'   && <Text style={s.scanBtnTxt}>🎯 Capture Pose</Text>}
+          {phase === 'IDENTITY_PROMPT' && <Text style={s.scanBtnTxt}>📸 Auto Capturing...</Text>}
           {phase === 'RECOGNISING' && <ActivityIndicator color="#fff"/>}
           {phase === 'DONE'        && <Text style={s.scanBtnTxt}>✅ Done</Text>}
         </TouchableOpacity>
@@ -352,43 +384,6 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
     </View>
   );
 };
-
-/**
- * Helper: Build simulated landmarks for demo mode
- * Used when models are not available, to simulate landmark detection
- * for geometric liveness challenge evaluation
- */
-function buildSimulatedLandmarks(direction: 'LEFT' | 'RIGHT' | 'UP'): FaceLandmarks {
-  // Base neutral landmarks (centered)
-  const baseX = 160, baseY = 240, width = 120, height = 160;
-  
-  let noseTip = { x: baseX, y: baseY };
-  
-  // Adjust nose position based on challenge direction
-  switch (direction) {
-    case 'LEFT':
-      // Turn head left: nose moves left (~0.28 yaw ratio)
-      noseTip = { x: baseX - width * 0.22, y: baseY };
-      break;
-    case 'RIGHT':
-      // Turn head right: nose moves right (~0.72 yaw ratio)
-      noseTip = { x: baseX + width * 0.22, y: baseY };
-      break;
-    case 'UP':
-      // Tilt head up: nose moves up (~0.25 pitch ratio)
-      noseTip = { x: baseX, y: baseY - height * 0.15 };
-      break;
-  }
-  
-  return {
-    noseTip,
-    faceLeft:   { x: baseX - width / 2, y: baseY },
-    faceRight:  { x: baseX + width / 2, y: baseY },
-    faceTop:    { x: baseX, y: baseY - height / 2 },
-    faceBottom: { x: baseX, y: baseY + height / 2 },
-    eyeCentre:  { x: baseX, y: baseY - height * 0.15 },
-  };
-}
 
 // ─── Styling ───────────────────────────────────────────────────────────────────
 

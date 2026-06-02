@@ -252,29 +252,35 @@ export interface FaceDetection {
   confidence: number;
 }
 
+function getAnchor(i: number) {
+  if (i < 512) {
+    const cellIdx = Math.floor(i / 2);
+    const y = Math.floor(cellIdx / 16);
+    const x = cellIdx % 16;
+    return { cx: (x + 0.5) / 16, cy: (y + 0.5) / 16 };
+  } else {
+    const cellIdx = Math.floor((i - 512) / 6);
+    const y = Math.floor(cellIdx / 8);
+    const x = cellIdx % 8;
+    return { cx: (x + 0.5) / 8, cy: (y + 0.5) / 8 };
+  }
+}
+
 /**
  * Parse BlazeFace detection output
  */
 function parseDetections(
   detections: Float32Array,
-  landmarks: Float32Array
+  scores: Float32Array
 ): FaceDetection[] {
   const faces: FaceDetection[] = [];
-
-  // BlazeFace uses SSD-like anchor scheme
-  // Filter detections by confidence threshold
   const confidenceThreshold = 0.5;
-
-  // Simplified parsing - full implementation would handle all 896 anchors
-  // For efficiency, we find the highest confidence detection
 
   let maxConfidenceIdx = -1;
   let maxConfidence = confidenceThreshold;
 
   for (let i = 0; i < 896; i++) {
-    const offset = i * 16;
-    const confidence = detections[offset + 4]; // Confidence value
-
+    const confidence = scores[i];
     if (confidence > maxConfidence) {
       maxConfidence = confidence;
       maxConfidenceIdx = i;
@@ -283,20 +289,33 @@ function parseDetections(
 
   if (maxConfidenceIdx >= 0) {
     const offset = maxConfidenceIdx * 16;
+    const anchor = getAnchor(maxConfidenceIdx);
     
-    // Extract bounding box [ymin, xmin, ymax, xmax] normalized
-    const ymin = detections[offset + 0];
-    const xmin = detections[offset + 1];
-    const ymax = detections[offset + 2];
-    const xmax = detections[offset + 3];
+    // BlazeFace outputs raw dx, dy, w, h scaled by 128.0 (input size)
+    const raw_dy = detections[offset + 0];
+    const raw_dx = detections[offset + 1];
+    const raw_dh = detections[offset + 2];
+    const raw_dw = detections[offset + 3];
 
-    // Extract landmarks (6 key points)
+    const cx = raw_dx / 128.0 + anchor.cx;
+    const cy = raw_dy / 128.0 + anchor.cy;
+    const w = raw_dw / 128.0;
+    const h = raw_dh / 128.0;
+
+    const ymin = cy - h / 2;
+    const xmin = cx - w / 2;
+    const ymax = cy + h / 2;
+    const xmax = cx + w / 2;
+
+    // Extract landmarks (6 key points, starting at offset + 4)
+    // 0: right eye, 1: left eye, 2: nose, 3: mouth, 4: right ear, 5: left ear
     const faceLandmarks: Landmark[] = [];
     for (let i = 0; i < 6; i++) {
-      const landmarkIdx = maxConfidenceIdx * 6 + i;
+      const lx = detections[offset + 4 + i * 2];
+      const ly = detections[offset + 5 + i * 2];
       faceLandmarks.push({
-        x: landmarks[landmarkIdx * 2],
-        y: landmarks[landmarkIdx * 2 + 1],
+        x: lx / 128.0 + anchor.cx,
+        y: ly / 128.0 + anchor.cy,
       });
     }
 

@@ -184,6 +184,67 @@ export class EmbeddingService {
   }
 
   /**
+   * Detect face and landmarks from image file path
+   * Resizes image to 320x320 for BlazeFace and extracts detections
+   */
+  static async detectFaceFromPath(imagePath: string): Promise<any | null> {
+    try {
+      Logger.info(`Face detection: ${imagePath.substring(0, 60)}...`);
+
+      const fileInfo = await FileSystem.getInfoAsync(imagePath);
+      if (!fileInfo.exists) throw new Error(`Image not found: ${imagePath}`);
+
+      const meta = await manipulateAsync(imagePath, []);
+      const manipSteps: any[] = [];
+      let imgWidth = meta.width;
+      let imgHeight = meta.height;
+
+      if (meta.width > meta.height) {
+        manipSteps.push({ rotate: -90 });
+        imgWidth = meta.height;
+        imgHeight = meta.width;
+      }
+
+      // BlazeFace expects 128x128
+      const BLAZEFACE_SIZE = 128;
+      manipSteps.push({
+        resize: { width: BLAZEFACE_SIZE, height: BLAZEFACE_SIZE },
+      });
+
+      const manipResult = await manipulateAsync(imagePath, manipSteps, {
+        compress: 1.0,
+        format: SaveFormat.JPEG,
+        base64: true,
+      });
+
+      if (!manipResult.base64) throw new Error('Failed to get base64');
+      const imageBuffer = require('buffer').Buffer.from(manipResult.base64, 'base64');
+      const jpeg = require('jpeg-js');
+      const rawImageData = jpeg.decode(imageBuffer, { useTArray: true });
+      const data = rawImageData.data;
+
+      // Convert RGBA to normalized Float32Array RGB [0..1]
+      const float32Data = new Float32Array(BLAZEFACE_SIZE * BLAZEFACE_SIZE * 3);
+      for (let y = 0; y < BLAZEFACE_SIZE; y++) {
+        for (let x = 0; x < BLAZEFACE_SIZE; x++) {
+          const srcIndex = (y * BLAZEFACE_SIZE + x) * 4;
+          const dstIndex = (y * BLAZEFACE_SIZE + x) * 3;
+          float32Data[dstIndex] = (data[srcIndex] - 127.5) / 128.0;
+          float32Data[dstIndex + 1] = (data[srcIndex + 1] - 127.5) / 128.0;
+          float32Data[dstIndex + 2] = (data[srcIndex + 2] - 127.5) / 128.0;
+        }
+      }
+
+      // Run BlazeFace
+      const detection = TFLiteService.detectFace(float32Data);
+      return detection;
+    } catch (error) {
+      Logger.error('Face detection failed', error);
+      return null;
+    }
+  }
+
+  /**
    * Fallback demo mode: generate random embedding (for offline testing)
    */
   static generateRandomEmbedding(): Float32Array {
