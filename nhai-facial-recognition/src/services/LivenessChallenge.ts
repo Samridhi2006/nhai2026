@@ -43,7 +43,7 @@
 
 // ─── Public Types ─────────────────────────────────────────────────────────────
 
-export type ChallengeDirection = 'LEFT' | 'RIGHT' | 'UP' | 'DOWN';
+export type ChallengeDirection = 'LEFT' | 'RIGHT' | 'UP';
 
 export interface FaceLandmarks {
   /** Nose tip pixel position */
@@ -79,11 +79,10 @@ const YAW_LEFT_MAX   = 0.38;   // decrease for stricter left detection
 /** Yaw ratio: face turned enough to the RIGHT when above this value */
 const YAW_RIGHT_MIN  = 0.62;   // increase for stricter right detection
 
-/** Pitch ratio: face tilted enough UPWARD when below this value */
-const PITCH_UP_MAX   = 0.35;   // decrease for stricter up detection
+/** Pitch ratio: face tilted enough UPWARD when above this value */
+const PITCH_UP_MIN   = 0.48;   
 
-/** Pitch ratio: face tilted enough DOWNWARD when above this value */
-const PITCH_DOWN_MIN = 0.45;   // increase for stricter down detection
+
 
 /** Consecutive "in-threshold" frames before ChallengePassed = true */
 const HOLD_FRAMES    = 8;
@@ -93,13 +92,12 @@ const TIMEOUT_MS     = 10_000;
 
 // ─── Challenge Directions & Prompts ──────────────────────────────────────────
 
-const DIRECTIONS: ChallengeDirection[] = ['LEFT', 'RIGHT', 'UP', 'DOWN'];
+const DIRECTIONS: ChallengeDirection[] = ['LEFT', 'RIGHT', 'UP'];
 
 const PROMPTS: Record<ChallengeDirection, string> = {
   LEFT:  'Turn your head slightly to the Left',
   RIGHT: 'Turn your head slightly to the Right',
   UP:    'Tilt your head slightly Up',
-  DOWN:  'Tilt your head slightly Down',
 };
 
 // ─── Core Engine ─────────────────────────────────────────────────────────────
@@ -292,8 +290,7 @@ export const LivenessChallenge = {
     switch (direction) {
       case 'LEFT':  return yawRatio < YAW_LEFT_MAX;
       case 'RIGHT': return yawRatio > YAW_RIGHT_MIN;
-      case 'UP':    return pitchRatio < PITCH_UP_MAX;
-      case 'DOWN':  return pitchRatio > PITCH_DOWN_MIN;
+      case 'UP':    return pitchRatio > PITCH_UP_MIN;
       default:      return false;
     }
   },

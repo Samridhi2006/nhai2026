@@ -60,8 +60,15 @@ export const HomeScreen: React.FC<Props> = ({ onNavigate }) => {
       }
       setWeeklyData(wData);
       
-      // We don't have shift "Late" status in old DB, just default to 0 for now
-      setLateToday(0);
+      let lCount = 0;
+      const seenForLate = new Set<string>();
+      todayLogs.forEach((l: any) => {
+        if (!seenForLate.has(l.employee_id)) {
+          seenForLate.add(l.employee_id);
+          if (l.status === 'Late') lCount++;
+        }
+      });
+      setLateToday(lCount);
     } catch (e) {
       Logger.warn('Stats load failed', e);
     }

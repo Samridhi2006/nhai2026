@@ -268,7 +268,6 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
       case 'LEFT':  return '⬅️';
       case 'RIGHT': return '➡️';
       case 'UP':    return '⬆️';
-      case 'DOWN':  return '⬇️';
     }
   };
 

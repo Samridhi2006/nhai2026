@@ -83,12 +83,12 @@ export const AttendanceSheetScreen: React.FC<Props> = ({ onBack }) => {
     }
     
     try {
-      const header = 'ID,Employee ID,Name,Time,Latitude,Longitude,Location Status,Shift,Status,Synced\\n';
+      const header = 'ID,Employee ID,Name,Time,Latitude,Longitude,Location Status,Shift,Status,Synced\n';
       const rows = logs.map(log => {
         const d = new Date(log.timestamp);
         const timeStr = `${d.toLocaleDateString()} ${d.toLocaleTimeString()}`;
         return `${log.id},${log.employee_id},"${log.name}","${timeStr}",${log.latitude || ''},${log.longitude || ''},${log.location_status},${log.shift_name},${log.status},${log.synced === 1 ? 'Yes' : 'No'}`;
-      }).join('\\n');
+      }).join('\n');
       
       const fileUri = FileSystem.documentDirectory + 'attendance_export.csv';
       await FileSystem.writeAsStringAsync(fileUri, header + rows, { encoding: FileSystem.EncodingType.UTF8 });

@@ -204,11 +204,12 @@ export const ShiftPunctuality = {
 function detectShiftFromTime(d: Date): ShiftDefinition {
   const mins = d.getHours() * 60 + d.getMinutes();
 
-  // Morning:   360 – 839  (06:00 – 13:59)
-  if (mins >= 360 && mins < 840) return SHIFTS[0];
-  // Afternoon: 840 – 1319 (14:00 – 21:59)
-  if (mins >= 840 && mins < 1320) return SHIFTS[1];
-  // Night:     1320 – 1439 + 0 – 359 (22:00 – 05:59 next day)
+  // Shift boundaries are moved back by 60 mins to allow early check-ins
+  // Morning:   300 - 779  (05:00 - 12:59)
+  if (mins >= 300 && mins < 780) return SHIFTS[0];
+  // Afternoon: 780 - 1259 (13:00 - 20:59)
+  if (mins >= 780 && mins < 1260) return SHIFTS[1];
+  // Night:     1260 - 299 (21:00 - 04:59 next day)
   return SHIFTS[2];
 }
 
