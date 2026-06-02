@@ -163,7 +163,7 @@ export class TFLiteService {
    * 
    * ✅ v3 API: Input/output are ArrayBuffers
    */
-  static extractEmbedding(faceCropBuffer: ArrayBuffer): Float32Array {
+  static async extractEmbedding(faceCropBuffer: Float32Array | ArrayBuffer): Promise<Float32Array> {
     const service = TFLiteService.getInstance();
     if (!service._mobileFaceNetModel) {
       throw new Error('MobileFaceNet model not loaded');
@@ -172,12 +172,31 @@ export class TFLiteService {
     try {
       const startTime = Date.now();
 
-      // ✅ v3 API: Pass ArrayBuffer directly
-      const output = service._mobileFaceNetModel.runSync([faceCropBuffer]);
+      if (!(service as any)._hasAlertedModelInfo) {
+        (service as any)._hasAlertedModelInfo = true;
+        const input = service._mobileFaceNetModel.inputs[0];
+        const output = service._mobileFaceNetModel.outputs[0];
+        import('react-native').then(RN => {
+          RN.Alert.alert('Model Specs', 
+            `Input: ${input.dataType} [${input.shape.join(',')}]\n` +
+            `Output: ${output.dataType} [${output.shape.join(',')}]\n`
+          );
+        });
+      }
 
-      // ✅ v3 API: Output is ArrayBuffer - wrap in typed array
-      // MobileFaceNet outputs 128-dimensional embedding
-      const embedding = new Float32Array(output[0]!);
+      // ✅ v3 API JSI requires Uint8Array for all input tensors
+      const buffer = faceCropBuffer instanceof Float32Array ? faceCropBuffer.buffer : faceCropBuffer;
+      const inputBytes = new Uint8Array(buffer);
+      
+      // USE ASYNC RUN! runSync has a known JSI bug on some Android devices where it fails to copy the input tensor!
+      const output = await service._mobileFaceNetModel.run([inputBytes]);
+
+      // ✅ v3 API returns Uint8Array of raw bytes pointing to the volatile C++ tensor memory. 
+      // We MUST read the underlying ArrayBuffer as Float32, and then CLONE it so it doesn't mutate on the next inference!
+      const outputBytes = output[0]!;
+      const volatileFloats = new Float32Array(outputBytes.buffer, outputBytes.byteOffset, outputBytes.byteLength / 4);
+      // The model outputs a batch of 2 embeddings [2, 192]. We only want the first 192 floats (the first image).
+      const embedding = new Float32Array(volatileFloats.slice(0, 192)); 
 
       const latency = Date.now() - startTime;
       console.log(`Embedding extraction: ${latency}ms`);

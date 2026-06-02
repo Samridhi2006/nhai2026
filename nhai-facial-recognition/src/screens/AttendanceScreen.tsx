@@ -283,6 +283,7 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
               style={StyleSheet.absoluteFill}
               device={device}
               isActive={true}
+              photo={true}
             />
             <View style={[s.faceOval, phase === 'CHALLENGE' && s.faceOvalChallenge, phase === 'DONE' && s.faceOvalDone]} pointerEvents="none"/>
 

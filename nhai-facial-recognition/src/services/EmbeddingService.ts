@@ -69,7 +69,7 @@ export class EmbeddingService {
    *
    * @param imagePath         Absolute URI to image file
    * @param faceBoundingBox   Optional face bounding box for cropping
-   * @returns Float32Array    128-dimensional embedding vector
+   * @returns Float32Array    192-dimensional embedding vector
    */
   static async extractEmbeddingFromPath(
     imagePath: string,
@@ -79,15 +79,25 @@ export class EmbeddingService {
       Logger.info(`Embedding extraction: ${imagePath.substring(0, 60)}...`);
 
       // ─── Step 1: Verify image exists ──────────────────────────────────────
-      let actualPath = imagePath.startsWith('file://') ? imagePath.slice(7) : imagePath;
-      const fileInfo = await FileSystem.getInfoAsync(actualPath);
+      const fileInfo = await FileSystem.getInfoAsync(imagePath);
       if (!fileInfo.exists) {
         throw new Error(`Image not found: ${imagePath}`);
       }
 
       // ─── Step 2: Resize/crop to 112×112 ──────────────────────────────────
+      const meta = await manipulateAsync(imagePath, []);
       const manipSteps: any[] = [];
       
+      let imgWidth = meta.width;
+      let imgHeight = meta.height;
+
+      // Fix Android VisionCamera sideways orientation issue
+      if (meta.width > meta.height && !faceBoundingBox) {
+        manipSteps.push({ rotate: -90 });
+        imgWidth = meta.height; // Update virtual dimensions after rotation
+        imgHeight = meta.width;
+      }
+
       if (faceBoundingBox) {
         manipSteps.push({
           crop: {
@@ -95,6 +105,21 @@ export class EmbeddingService {
             originY: Math.max(0, Math.round(faceBoundingBox.ymin)),
             width: Math.max(1, Math.round(faceBoundingBox.width)),
             height: Math.max(1, Math.round(faceBoundingBox.height)),
+          },
+        });
+      } else {
+        // GEOMETRIC AUTO-CROP
+        // Since MLKit face detection was uninstalled, we mathematically crop 
+        // the center 60% of the raw photo (which perfectly aligns with the UI Oval).
+        // This strips out the ceiling/background and isolates the pure face!
+        const minDim = Math.min(imgWidth, imgHeight);
+        const cropSize = Math.round(minDim * 0.60);
+        manipSteps.push({
+          crop: {
+            originX: Math.round((imgWidth - cropSize) / 2),
+            originY: Math.round((imgHeight - cropSize) / 2),
+            width: cropSize,
+            height: cropSize,
           },
         });
       }
@@ -109,13 +134,45 @@ export class EmbeddingService {
       const manipResult = await manipulateAsync(imagePath, manipSteps, {
         compress: 1.0,
         format: SaveFormat.JPEG,
+        base64: true,
       });
 
       Logger.info(`✓ Image prepared: 112×112`);
 
-      // ─── Step 3: Let TFLiteService extract embedding ─────────────────────
-      // Pass the file path directly - TFLite handles JPEG decoding natively
-      const embedding = TFLiteService.extractEmbedding(manipResult.uri as any);
+      // ─── Step 3: Decode JPEG to RGB Array ────────────────────────────────
+      if (!manipResult.base64) throw new Error('Failed to get base64 from image');
+      const imageBuffer = require('buffer').Buffer.from(manipResult.base64, 'base64');
+      const jpeg = require('jpeg-js');
+      const rawImageData = jpeg.decode(imageBuffer, { useTArray: true });
+      const data = rawImageData.data;
+
+      // Convert RGBA to normalized Float32Array RGB [0..1]
+      const TARGET_SIZE = MOBILEFACENET_INPUT_SIZE;
+      const IMAGE_FLOATS = TARGET_SIZE * TARGET_SIZE * 3;
+      // Model expects batch size of 2! [2, 112, 112, 3]
+      const float32Data = new Float32Array(2 * IMAGE_FLOATS);
+      for (let y = 0; y < TARGET_SIZE; y++) {
+        for (let x = 0; x < TARGET_SIZE; x++) {
+          const srcIndex = (y * TARGET_SIZE + x) * 4;
+          const dstIndex = (y * TARGET_SIZE + x) * 3;
+          const r = (data[srcIndex] - 127.5) / 128.0;
+          const g = (data[srcIndex + 1] - 127.5) / 128.0;
+          const b = (data[srcIndex + 2] - 127.5) / 128.0;
+          
+          // Fill first image in batch
+          float32Data[dstIndex] = r;
+          float32Data[dstIndex + 1] = g;
+          float32Data[dstIndex + 2] = b;
+          
+          // Fill second image in batch (duplicate)
+          float32Data[IMAGE_FLOATS + dstIndex] = r;
+          float32Data[IMAGE_FLOATS + dstIndex + 1] = g;
+          float32Data[IMAGE_FLOATS + dstIndex + 2] = b;
+        }
+      }
+
+      // ─── Step 4: Let TFLiteService extract embedding ─────────────────────
+      const embedding = await TFLiteService.extractEmbedding(float32Data);
 
       Logger.info(`✓ Embedding extracted: ${embedding.length}D vector`);
       return embedding;
@@ -130,13 +187,13 @@ export class EmbeddingService {
    * Fallback demo mode: generate random embedding (for offline testing)
    */
   static generateRandomEmbedding(): Float32Array {
-    const emb = new Float32Array(128);
-    for (let i = 0; i < 128; i++) {
+    const emb = new Float32Array(192);
+    for (let i = 0; i < 192; i++) {
       emb[i] = (Math.random() - 0.5) * 2; // Range [-1..1]
     }
     // Normalize to unit magnitude
     const mag = Math.sqrt(emb.reduce((s, v) => s + v * v, 0));
-    for (let i = 0; i < 128; i++) emb[i] /= mag;
+    for (let i = 0; i < 192; i++) emb[i] /= mag;
     return emb;
   }
 }

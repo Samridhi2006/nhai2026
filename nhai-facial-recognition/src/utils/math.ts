@@ -9,7 +9,7 @@
  */
 export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
   if (a.length !== b.length) {
-    throw new Error('Vector dimensions mismatch');
+    return -1; // Gracefully return -1 so corrupted DB records are ignored instead of crashing
   }
 
   let dotProduct = 0;
