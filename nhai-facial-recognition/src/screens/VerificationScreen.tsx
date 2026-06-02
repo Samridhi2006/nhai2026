@@ -85,7 +85,8 @@ export const VerificationScreen: React.FC<Props> = ({ onBack }) => {
         setResultMsg(`🔍 No match... ${Math.min(100, Math.round(best.score * 100) + 10)}% highest match`);
       }
     } catch(err) {
-      setResultMsg('❌ Scan Failed');
+      console.error('[VERIFICATION] Scan failed:', err);
+      setResultMsg(`❌ Scan Failed: ${(err as Error).message}`);
     } finally {
       setScanning(false);
       
@@ -130,7 +131,7 @@ export const VerificationScreen: React.FC<Props> = ({ onBack }) => {
         {!hasPermission ? <Text style={s.camErr}>Camera permission required</Text>
         : !device ? <Text style={s.camErr}>Camera hardware unlinked</Text>
         : <>
-            <Camera ref={cameraRef} style={StyleSheet.absoluteFill} device={device} isActive={camActive} />
+            <Camera ref={cameraRef} style={StyleSheet.absoluteFill} device={device} isActive={camActive} photo={true} />
             <View style={[s.scanFrame, scanning && s.scanActive]} pointerEvents="none" />
           </>}
       </View>

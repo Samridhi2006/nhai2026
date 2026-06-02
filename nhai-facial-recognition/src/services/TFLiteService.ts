@@ -171,19 +171,7 @@ export class TFLiteService {
 
     try {
       const startTime = Date.now();
-
-      if (!(service as any)._hasAlertedModelInfo) {
-        (service as any)._hasAlertedModelInfo = true;
-        const input = service._mobileFaceNetModel.inputs[0];
-        const output = service._mobileFaceNetModel.outputs[0];
-        import('react-native').then(RN => {
-          RN.Alert.alert('Model Specs', 
-            `Input: ${input.dataType} [${input.shape.join(',')}]\n` +
-            `Output: ${output.dataType} [${output.shape.join(',')}]\n`
-          );
-        });
-      }
-
+      
       // ✅ v3 API JSI requires Uint8Array for all input tensors
       const buffer = faceCropBuffer instanceof Float32Array ? faceCropBuffer.buffer : faceCropBuffer;
       const inputBytes = new Uint8Array(buffer);

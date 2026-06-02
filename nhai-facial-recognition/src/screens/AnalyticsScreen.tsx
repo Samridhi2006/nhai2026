@@ -181,8 +181,13 @@ export const AnalyticsScreen: React.FC<Props> = ({ onBack }) => {
                 return (
                   <View key={shift.shiftName} style={s.shiftRow}>
                     <View style={s.shiftTopRow}>
-                      <Text style={s.shiftName}>{shift.shiftName}</Text>
-                      <Text style={s.shiftCount}>{shift.count}</Text>
+                      <Text style={s.shiftName}>
+                        {shift.shiftName === 'Morning Shift' ? 'Morning Shift (06:00 - 14:00)' :
+                         shift.shiftName === 'Afternoon Shift' ? 'Afternoon Shift (14:00 - 22:00)' :
+                         shift.shiftName === 'Night Shift' ? 'Night Shift (22:00 - 06:00)' :
+                         shift.shiftName}
+                      </Text>
+                      <Text style={s.shiftCount}>{shift.count} present</Text>
                     </View>
                     <View style={s.shiftTrack}>
                       <View style={[s.shiftFill, { width, backgroundColor: color }]} />
