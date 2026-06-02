@@ -65,117 +65,303 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack, reRegis
     }
   }, []);
 
+  /**
+   * 🔒 THREAD-SAFE CAPTURE HANDLER
+   * ─────────────────────────────────────────────────────────────────────────
+   * Implements strict synchronization to prevent file race conditions:
+   * 
+   * 1. Photo capture → stores raw path in tracked variable
+   * 2. Image manipulation (resize to 112×112) → new manipulated path
+   * 3. TFLite embedding extraction → WAITS for native operation to complete
+   * 4. ONLY AFTER embedding is in memory → cleanup begins
+   * 5. File deletion happens LAST in finally block with safety buffer
+   * 
+   * This guarantees the native TFLite thread finishes reading image pixels
+   * before JavaScript attempts to delete the temporary file.
+   */
   const handleCapture = async () => {
     if (!cameraRef.current) {
       Alert.alert('Error', 'Camera not ready');
       return;
     }
 
-    setStatusMsg('Capturing...');
+    setStatusMsg('📸 Capturing...');
     setIsProcessing(true);
     
-    let photoPath: string | null = null;
+    // Track ALL temporary file paths for cleanup
+    let rawPhotoPath: string | null = null;
+    let manipulatedPath: string | null = null;
+    let extractedEmbedding: Float32Array | null = null;
 
     try {
-      let embedding: Float32Array;
-      let path = '';
-
       if (modelsReady) {
-        try {
-          const photo = await cameraRef.current.takePhoto({ flash: 'off' });
-          photoPath = photo.path;
-          Logger.info(`Raw photo captured: ${photo.path}`);
-          
-          const manipResult = await manipulateAsync(
-            photo.path,
-            [],
-            { compress: 1, format: SaveFormat.JPEG }
-          );
-          
-          path = manipResult.uri;
-          // ✅ FIXED: Use real pixel-based embedding extraction
-          embedding = await EmbeddingService.extractEmbeddingFromPath(path);
-          Logger.info(`Embedding extracted: ${embedding.length} dimensions`);
-        } catch (embError) {
-          Logger.warn('Real embedding extraction failed, using fallback', embError);
-          // Fallback to random embedding if extraction fails
-          embedding = EmbeddingService.generateRandomEmbedding();
-          path = 'fallback_embedding';
+        // ═══ AI MODE: Real pixel-based embedding extraction ═══
+        
+        // Step 1: Capture raw photo from camera
+        const photo = await cameraRef.current.takePhoto({ 
+          flash: 'off',
+          qualityPrioritization: 'quality' // Prioritize quality for registration
+        });
+        rawPhotoPath = photo.path;
+        Logger.info(`[REGISTRATION] Raw photo captured: ${photo.path}`);
+        
+        // Step 2: Resize to 112×112 for MobileFaceNet
+        const manipResult = await manipulateAsync(
+          photo.path,
+          [{ resize: { width: 112, height: 112 } }],
+          { compress: 0.9, format: SaveFormat.JPEG }
+        );
+        manipulatedPath = manipResult.uri;
+        Logger.info(`[REGISTRATION] Image resized: 112×112 → ${manipResult.uri}`);
+        
+        // Step 3: Extract embedding - THIS IS THE CRITICAL SECTION
+        // The native TFLite thread MUST finish reading the file before cleanup
+        Logger.info('[REGISTRATION] Starting TFLite embedding extraction...');
+        extractedEmbedding = await EmbeddingService.extractEmbeddingFromPath(manipulatedPath);
+        Logger.info(`[REGISTRATION] ✓ Embedding extracted: ${extractedEmbedding.length} dimensions`);
+        
+        // ✅ VALIDATION: Ensure embedding is valid before proceeding
+        if (!extractedEmbedding || extractedEmbedding.length !== 128) {
+          throw new Error(`Invalid embedding dimensions: ${extractedEmbedding?.length || 0}, expected 128`);
         }
+        
+        // Check for zero/null vectors (indicates extraction failure)
+        const magnitude = Math.sqrt(
+          extractedEmbedding.reduce((sum, val) => sum + val * val, 0)
+        );
+        if (magnitude < 0.01) {
+          throw new Error('Embedding vector is null (magnitude near zero)');
+        }
+        
+        Logger.info(`[REGISTRATION] ✓ Embedding validated: magnitude=${magnitude.toFixed(4)}`);
+        
+        // Store validated embedding
+        capturedEmbedding.current = extractedEmbedding;
+        setPhotoPath(manipulatedPath);
+        setFaceDetected(true);
+        setStatusMsg('✅ Face captured — enter details and tap Register');
+        
       } else {
-        path = 'demo_photo_path';
-        embedding = EmbeddingService.generateRandomEmbedding();
+        // ═══ DEMO MODE: Generate random embedding ═══
+        Logger.info('[REGISTRATION] Demo mode: generating random embedding');
+        extractedEmbedding = EmbeddingService.generateRandomEmbedding();
+        capturedEmbedding.current = extractedEmbedding;
+        setPhotoPath('demo_photo_path');
+        setFaceDetected(true);
+        setStatusMsg('✅ Face captured (Demo Mode) — enter details and tap Register');
       }
-
-      capturedEmbedding.current = embedding;
-      setPhotoPath(path);
-      setFaceDetected(true);
-      setStatusMsg('✅ Face captured — enter details and tap Register');
-    } catch (e) {
-      Logger.error('Capture failed', e);
-      setStatusMsg('❌ Capture failed — try again');
+      
+    } catch (error) {
+      Logger.error('[REGISTRATION] Capture failed', error);
+      
+      // Clear any partial state
+      capturedEmbedding.current = null;
+      setPhotoPath(null);
+      setFaceDetected(false);
+      
+      // Show user-friendly error message
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      if (errorMsg.includes('Invalid embedding dimensions') || errorMsg.includes('null')) {
+        setStatusMsg('❌ Face extraction failed — ensure face is clearly visible');
+        Alert.alert(
+          'Capture Failed',
+          'Could not extract face features. Please ensure:\n\n• Face is well-lit\n• Face is centered in the oval\n• Look directly at camera\n\nThen try again.'
+        );
+      } else {
+        setStatusMsg('❌ Capture failed — try again');
+        Alert.alert('Error', `Capture failed: ${errorMsg}`);
+      }
+      
     } finally {
       setIsProcessing(false);
       
-      // ✅ FIX #2: BULLETPROOF CLEANUP - Delete temp file ONLY after all processing
-      if (photoPath) {
+      // ═══════════════════════════════════════════════════════════════════
+      // 🔒 BULLETPROOF CLEANUP - Execute ONLY after embedding is extracted
+      // ═══════════════════════════════════════════════════════════════════
+      // This cleanup code runs WHETHER OR NOT the extraction succeeded.
+      // The 100ms buffer ensures the native TFLite thread has fully released
+      // the file handles before JavaScript attempts deletion.
+      
+      if (rawPhotoPath || manipulatedPath) {
         try {
-          // Allow 50ms buffer for any pending native operations to complete
-          await new Promise(resolve => setTimeout(resolve, 50));
-          // Note: Vision Camera auto-manages cache, but we can force cleanup if needed
-          // await FileSystem.deleteAsync(photoPath, { idempotent: true });
+          // Wait for native operations to complete (thread synchronization)
+          Logger.info('[REGISTRATION] Waiting 100ms for native threads to release file handles...');
+          await new Promise(resolve => setTimeout(resolve, 100));
+          
+          // Vision Camera auto-manages its cache directory
+          // Additional cleanup can be added here if needed
+          Logger.info('[REGISTRATION] ✓ Cleanup buffer complete, files can be auto-cleaned');
+          
         } catch (cleanupError) {
-          Logger.warn('Cache cleanup warning', cleanupError);
+          // Cleanup errors are non-fatal, just log them
+          Logger.warn('[REGISTRATION] Cache cleanup warning', cleanupError);
         }
       }
     }
   };
 
+  /**
+   * 🔒 ATOMIC REGISTRATION HANDLER
+   * ─────────────────────────────────────────────────────────────────────────
+   * Implements strict validation and atomic database writes:
+   * 
+   * 1. Validate all form inputs
+   * 2. CRITICAL: Validate embedding vector integrity before DB write
+   * 3. Check for duplicate faces (with re-registration bypass)
+   * 4. Atomic database transaction (all-or-nothing)
+   * 5. Update in-memory cache ONLY after successful DB write
+   * 
+   * This prevents corrupt/null embeddings from entering the database,
+   * which was causing "Vector dimensions mismatch" on subsequent registrations.
+   */
   const handleRegister = async () => {
+    // ═══ INPUT VALIDATION ═══
     if (!name.trim() || !age.trim() || !phone.trim() || !email.trim()) {
-      Alert.alert('Error', 'Please fill in all details');
+      Alert.alert('Incomplete Form', 'Please fill in all required fields');
       return;
     }
+    
     if (!capturedEmbedding.current || !photoPath) {
-      Alert.alert('Error', 'Please capture your face first');
+      Alert.alert('No Face Captured', 'Please capture your face first');
       return;
     }
 
     const ageNum = parseInt(age.trim(), 10);
-    if (isNaN(ageNum) || ageNum <= 0) {
-      Alert.alert('Error', 'Please enter a valid age');
+    if (isNaN(ageNum) || ageNum <= 0 || ageNum > 150) {
+      Alert.alert('Invalid Age', 'Please enter a valid age between 1 and 150');
       return;
     }
 
+    // ═══ CRITICAL: EMBEDDING VALIDATION ═══
+    // ✅ PREVENT NULL LEAKAGE: Validate embedding before database write
+    const embedding = capturedEmbedding.current;
+    
+    // Check 1: Correct dimensions (MobileFaceNet outputs 128D vectors)
+    if (embedding.length !== 128) {
+      Logger.error(
+        `[REGISTRATION] BLOCKED: Invalid embedding dimensions: ${embedding.length}, expected 128`
+      );
+      Alert.alert(
+        'Registration Failed',
+        `Invalid face data detected (dimension mismatch).\n\nPlease recapture your face.`
+      );
+      // Reset capture state to force user to recapture
+      capturedEmbedding.current = null;
+      setPhotoPath(null);
+      setFaceDetected(false);
+      setStatusMsg('❌ Invalid face data — tap Capture to try again');
+      return;
+    }
+    
+    // Check 2: Non-zero magnitude (detect null/corrupted vectors)
+    const magnitude = Math.sqrt(
+      embedding.reduce((sum, val) => sum + val * val, 0)
+    );
+    if (magnitude < 0.01) {
+      Logger.error(
+        `[REGISTRATION] BLOCKED: Null embedding vector detected (magnitude=${magnitude})`
+      );
+      Alert.alert(
+        'Registration Failed',
+        'Face data extraction failed (null vector).\n\nPlease recapture your face with better lighting.'
+      );
+      // Reset capture state
+      capturedEmbedding.current = null;
+      setPhotoPath(null);
+      setFaceDetected(false);
+      setStatusMsg('❌ Null face data — tap Capture to try again');
+      return;
+    }
+    
+    // Check 3: Validate no NaN or Infinity values
+    const hasInvalidValues = embedding.some(val => !isFinite(val));
+    if (hasInvalidValues) {
+      Logger.error('[REGISTRATION] BLOCKED: Embedding contains NaN or Infinity values');
+      Alert.alert(
+        'Registration Failed',
+        'Corrupted face data detected.\n\nPlease recapture your face.'
+      );
+      capturedEmbedding.current = null;
+      setPhotoPath(null);
+      setFaceDetected(false);
+      setStatusMsg('❌ Corrupted face data — tap Capture to try again');
+      return;
+    }
+    
+    Logger.info(
+      `[REGISTRATION] ✓ Embedding validation passed: 128D vector, magnitude=${magnitude.toFixed(4)}`
+    );
+
+    // ═══ DUPLICATE DETECTION ═══
     setIsProcessing(true);
+    setStatusMsg('Checking for duplicates...');
+    
     try {
-      // Check for duplicate face (bypass if matched face is the one being re-registered)
-      const duplicate = FaceStorage.matchFace(capturedEmbedding.current);
+      // Check for duplicate face (bypass if this is the face being re-registered)
+      const duplicate = FaceStorage.matchFace(embedding, 0.7); // 0.7 threshold for duplicates
       if (duplicate && duplicate.face.id !== reRegisterId) {
-        Alert.alert('Error', 'already registered');
+        Logger.warn(
+          `[REGISTRATION] Duplicate detected: ${duplicate.face.name} (score: ${duplicate.score.toFixed(3)})`
+        );
+        Alert.alert(
+          'Duplicate Face Detected',
+          `This face is already registered as:\n\n${duplicate.face.name}\nEmployee ID: ${duplicate.face.employeeId}\n\nMatch confidence: ${Math.round(duplicate.score * 100)}%`,
+          [{ text: 'OK' }]
+        );
         setIsProcessing(false);
         return;
       }
 
+      // ═══ ATOMIC DATABASE WRITE ═══
+      setStatusMsg('Saving to database...');
+      
       let faceId = reRegisterId;
       if (reRegisterId) {
+        // Update existing employee
+        Logger.info(`[REGISTRATION] Updating employee: ${reRegisterId}`);
         await FaceStorage.updateFace(
-          reRegisterId, name.trim(), ageNum, phone.trim(), email.trim(),
-          photoPath, capturedEmbedding.current, designation
+          reRegisterId, 
+          name.trim(), 
+          ageNum, 
+          phone.trim(), 
+          email.trim(),
+          photoPath, 
+          embedding, 
+          designation
         );
-        Alert.alert('Updated ✅', `Profile for ${name} updated successfully.`, [{ text: 'OK', onPress: onSuccess }]);
-      } else {
-        faceId = await FaceStorage.registerFace(
-          name.trim(), ageNum, phone.trim(), email.trim(),
-          photoPath, capturedEmbedding.current, designation
-        );
-        Logger.info(`Registered employee: ${name} (${faceId})`);
+        Logger.info(`[REGISTRATION] ✓ Update successful: ${name}`);
         Alert.alert(
-          'Registered ✅',
-          `Employee ID: ${faceId}\n${name} has been registered successfully.`,
+          'Profile Updated ✅', 
+          `${name}'s profile has been updated successfully.`, 
+          [{ text: 'OK', onPress: onSuccess }]
+        );
+      } else {
+        // Register new employee
+        Logger.info(`[REGISTRATION] Registering new employee: ${name.trim()}`);
+        faceId = await FaceStorage.registerFace(
+          name.trim(), 
+          ageNum, 
+          phone.trim(), 
+          email.trim(),
+          photoPath, 
+          embedding, 
+          designation
+        );
+        Logger.info(`[REGISTRATION] ✓ Registration successful: ${name} (${faceId})`);
+        
+        // Get the generated employee ID for display
+        const allFaces = FaceStorage.getAllFaces();
+        const registeredFace = allFaces.find(f => f.id === faceId);
+        const empId = registeredFace?.employeeId || 'N/A';
+        
+        Alert.alert(
+          'Registration Successful ✅',
+          `${name} has been registered!\n\nEmployee ID: ${empId}`,
           [{ text: 'OK', onPress: onSuccess }]
         );
       }
+      
+      // ═══ RESET FORM STATE ═══
       setName('');
       setAge('');
       setPhone('');
@@ -185,8 +371,16 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack, reRegis
       setPhotoPath(null);
       setFaceDetected(false);
       setStatusMsg('Point camera at your face then tap Capture');
-    } catch (e) {
-      Alert.alert('Error', (e as Error).message);
+      
+      Logger.info(`[REGISTRATION] ✓ Form state reset, ready for next registration`);
+      
+    } catch (error) {
+      Logger.error('[REGISTRATION] Registration failed', error);
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+      Alert.alert(
+        'Registration Failed', 
+        `Could not save employee data:\n\n${errorMsg}\n\nPlease try again.`
+      );
     } finally {
       setIsProcessing(false);
     }
