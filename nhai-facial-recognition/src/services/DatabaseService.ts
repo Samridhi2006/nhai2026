@@ -6,6 +6,7 @@
 
 import * as SQLite from 'expo-sqlite';
 import { Logger } from '../utils/logger';
+import { ShiftPunctuality } from '../utils/ShiftPunctuality';
 
 export interface Employee {
   id: string;
@@ -95,17 +96,7 @@ export class DatabaseService {
     } catch (e) { Logger.error('DB init failed', e); throw e; }
   }
 
-  private detectShift(ts: number): { shiftName: string; status: 'Present' | 'Late' } {
-    const d = new Date(ts);
-    const mins = d.getHours() * 60 + d.getMinutes();
-    if (mins >= 6 * 60 && mins < 14 * 60) {
-      return { shiftName: 'Morning Shift', status: mins > 6 * 60 + 15 ? 'Late' : 'Present' };
-    }
-    if (mins >= 14 * 60 && mins < 22 * 60) {
-      return { shiftName: 'Evening Shift', status: mins > 14 * 60 + 15 ? 'Late' : 'Present' };
-    }
-    return { shiftName: 'Night Shift', status: 'Present' };
-  }
+
 
   async insertEmployee(e: Omit<Employee, 'timestamp' | 'registeredAt'>): Promise<void> {
     if (!this.db) throw new Error('DB not init');
@@ -144,7 +135,9 @@ export class DatabaseService {
   async logAttendance(employeeId: string, name: string, lat?: number, lng?: number, locStatus?: string): Promise<void> {
     if (!this.db) throw new Error('DB not init');
     const ts = Date.now();
-    const { shiftName, status } = this.detectShift(ts);
+    const p = ShiftPunctuality.evaluate(ts);
+    const shiftName = p.currentShift;
+    const status = ShiftPunctuality.toDBStatus(p);
 
     const since = ts - 5 * 60 * 1000;
     const dup = await this.db.getFirstAsync(
@@ -226,11 +219,11 @@ export class DatabaseService {
 
   async exportCSV(): Promise<string> {
     const logs = await this.getAttendanceLogs();
-    const header = 'ID,Employee ID,Name,Date,Time,Shift,Status,Latitude,Longitude,Location\n';
+    const header = 'ID,Employee ID,Name,Date,Time,Shift,Status,Latitude,Longitude,Location\r\n';
     const rows = logs.map(l => {
       const d = new Date(l.timestamp);
       return `${l.id},${l.employee_id},"${l.name}",${d.toLocaleDateString('en-IN')},${d.toLocaleTimeString('en-IN')},"${l.shift_name}",${l.status},${l.latitude ?? ''},${l.longitude ?? ''},${l.location_status ?? ''}`;
-    }).join('\n');
+    }).join('\r\n');
     return header + rows;
   }
 }

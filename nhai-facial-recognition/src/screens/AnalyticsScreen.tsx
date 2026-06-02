@@ -48,8 +48,12 @@ export const AnalyticsScreen: React.FC<Props> = ({ onBack }) => {
       const uniqueMonth = new Set(allLogs.filter(l => l.timestamp >= monthStart).map(l => l.employee_id)).size;
       
       let lateCount = 0;
+      const seenForLate = new Set<string>();
       todayLogs.forEach(l => {
-        if ((l.status as string) === 'Late') lateCount++;
+        if (!seenForLate.has(l.employee_id)) {
+          seenForLate.add(l.employee_id);
+          if ((l.status as string) === 'Late') lateCount++;
+        }
       });
       
       setTotalUsers(allEmployees.length);
@@ -58,12 +62,13 @@ export const AnalyticsScreen: React.FC<Props> = ({ onBack }) => {
       setLateToday(lateCount);
       setOnTimeToday(Math.max(0, uniqueToday - lateCount));
 
-      const shiftMap = new Map();
+      const shiftMap = new Map<string, Set<string>>();
       todayLogs.forEach(l => {
         const sn = (l as any).shift_name || 'General Shift';
-        shiftMap.set(sn, (shiftMap.get(sn) || 0) + 1);
+        if (!shiftMap.has(sn)) shiftMap.set(sn, new Set());
+        shiftMap.get(sn)!.add(l.employee_id);
       });
-      const shiftArr = Array.from(shiftMap.entries()).map(([shiftName, count]) => ({ shiftName, count }));
+      const shiftArr = Array.from(shiftMap.entries()).map(([shiftName, idSet]) => ({ shiftName, count: idSet.size }));
       setShifts(shiftArr.length > 0 ? shiftArr : [{ shiftName: 'General Shift', count: uniqueToday }]);
 
       const toLocalYMD = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -183,7 +188,7 @@ export const AnalyticsScreen: React.FC<Props> = ({ onBack }) => {
                     <View style={s.shiftTopRow}>
                       <Text style={s.shiftName}>
                         {shift.shiftName === 'Morning Shift' ? 'Morning Shift (06:00 - 14:00)' :
-                         shift.shiftName === 'Afternoon Shift' ? 'Afternoon Shift (14:00 - 22:00)' :
+                         (shift.shiftName === 'Afternoon Shift' || shift.shiftName === 'Evening Shift') ? `${shift.shiftName} (14:00 - 22:00)` :
                          shift.shiftName === 'Night Shift' ? 'Night Shift (22:00 - 06:00)' :
                          shift.shiftName}
                       </Text>
