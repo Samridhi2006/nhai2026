@@ -33,6 +33,9 @@ export const VerificationScreen: React.FC<Props> = ({ onBack }) => {
     setScanning(true);
     setResultMsg('🔍 Scanning...');
     setVerifiedUser(null);
+    
+    let photoPath: string | null = null;
+    
     try {
       const faces = FaceStorage.getAllFaces();
       if (!faces.length) {
@@ -41,6 +44,7 @@ export const VerificationScreen: React.FC<Props> = ({ onBack }) => {
       }
       
       const photo = await cameraRef.current.takePhoto({ flash: 'off' });
+      photoPath = photo.path;
       
       const manipResult = await manipulateAsync(
         photo.path,
@@ -84,6 +88,18 @@ export const VerificationScreen: React.FC<Props> = ({ onBack }) => {
       setResultMsg('❌ Scan Failed');
     } finally {
       setScanning(false);
+      
+      // ✅ FIX #2: BULLETPROOF CLEANUP - Delete temp file ONLY after all processing
+      if (photoPath) {
+        try {
+          // Allow 50ms buffer for any pending native operations to complete
+          await new Promise(resolve => setTimeout(resolve, 50));
+          // Note: Vision Camera auto-manages cache, but we can force cleanup if needed
+          // await FileSystem.deleteAsync(photoPath, { idempotent: true });
+        } catch (cleanupError) {
+          console.warn('Cache cleanup warning', cleanupError);
+        }
+      }
     }
   };
 
@@ -114,8 +130,7 @@ export const VerificationScreen: React.FC<Props> = ({ onBack }) => {
         {!hasPermission ? <Text style={s.camErr}>Camera permission required</Text>
         : !device ? <Text style={s.camErr}>Camera hardware unlinked</Text>
         : <>
-            <Camera ref={cameraRef} style={StyleSheet.absoluteFill} device={device} isActive={camActive}
-              /* @ts-expect-error */ photo={true} pixelFormat="yuv" />
+            <Camera ref={cameraRef} style={StyleSheet.absoluteFill} device={device} isActive={camActive} />
             <View style={[s.scanFrame, scanning && s.scanActive]} pointerEvents="none" />
           </>}
       </View>

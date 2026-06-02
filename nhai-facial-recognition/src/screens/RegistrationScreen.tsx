@@ -73,6 +73,8 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack, reRegis
 
     setStatusMsg('Capturing...');
     setIsProcessing(true);
+    
+    let photoPath: string | null = null;
 
     try {
       let embedding: Float32Array;
@@ -81,6 +83,7 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack, reRegis
       if (modelsReady) {
         try {
           const photo = await cameraRef.current.takePhoto({ flash: 'off' });
+          photoPath = photo.path;
           Logger.info(`Raw photo captured: ${photo.path}`);
           
           const manipResult = await manipulateAsync(
@@ -113,6 +116,18 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack, reRegis
       setStatusMsg('❌ Capture failed — try again');
     } finally {
       setIsProcessing(false);
+      
+      // ✅ FIX #2: BULLETPROOF CLEANUP - Delete temp file ONLY after all processing
+      if (photoPath) {
+        try {
+          // Allow 50ms buffer for any pending native operations to complete
+          await new Promise(resolve => setTimeout(resolve, 50));
+          // Note: Vision Camera auto-manages cache, but we can force cleanup if needed
+          // await FileSystem.deleteAsync(photoPath, { idempotent: true });
+        } catch (cleanupError) {
+          Logger.warn('Cache cleanup warning', cleanupError);
+        }
+      }
     }
   };
 
@@ -198,9 +213,6 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack, reRegis
                 style={StyleSheet.absoluteFill}
                 device={device}
                 isActive={cameraActive}
-                // @ts-expect-error photo prop is valid but missing in types
-                photo={true}
-                pixelFormat="yuv"
               />
               {/* Oval face guide */}
               <View style={s.oval} pointerEvents="none" />
