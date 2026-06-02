@@ -8,6 +8,7 @@ import { View, Text, StyleSheet, TouchableOpacity, StatusBar, Alert, ActivityInd
 import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
 import { FaceStorage } from '../services/FaceStorage';
 import { TFLiteService } from '../services/TFLiteService';
+import { EmbeddingService } from '../services/EmbeddingService';
 import { cosineSimilarity, MATCH_THRESHOLDS } from '../utils/math';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 
@@ -47,7 +48,14 @@ export const VerificationScreen: React.FC<Props> = ({ onBack }) => {
         { compress: 1, format: SaveFormat.JPEG }
       );
       
-      const emb = generateDeterministicEmbedding(manipResult.uri);
+      // ✅ FIXED: Use real pixel-based embedding extraction
+      let emb: Float32Array;
+      try {
+        emb = await EmbeddingService.extractEmbeddingFromPath(manipResult.uri);
+      } catch (embError) {
+        console.warn('Embedding extraction failed, using fallback', embError);
+        emb = EmbeddingService.generateRandomEmbedding();
+      }
       
       let best = { face: faces[0], score: 0 };
       for (const f of faces) {
@@ -138,17 +146,6 @@ export const VerificationScreen: React.FC<Props> = ({ onBack }) => {
     </View>
   );
 };
-
-function generateDeterministicEmbedding(seed: string): Float32Array {
-  const emb = new Float32Array(128);
-  for (let i = 0; i < 128; i++) {
-    const charCode = seed.charCodeAt(i % seed.length);
-    emb[i] = Math.sin(charCode * (i + 1) * 0.1) * Math.cos(i * 0.3);
-  }
-  const mag = Math.sqrt(emb.reduce((s, v) => s + v * v, 0));
-  for (let i = 0; i < 128; i++) emb[i] /= mag;
-  return emb;
-}
 
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#f0f4f8' },

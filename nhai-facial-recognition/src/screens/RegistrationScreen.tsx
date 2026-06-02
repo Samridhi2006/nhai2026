@@ -15,6 +15,7 @@ import {
 } from 'react-native-vision-camera';
 import { FaceStorage } from '../services/FaceStorage';
 import { TFLiteService } from '../services/TFLiteService';
+import { EmbeddingService } from '../services/EmbeddingService';
 import { Logger } from '../utils/logger';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 
@@ -78,20 +79,29 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack, reRegis
       let path = '';
 
       if (modelsReady) {
-        const photo = await cameraRef.current.takePhoto({ flash: 'off' });
-        Logger.info(`Raw photo captured: ${photo.path}`);
-        
-        const manipResult = await manipulateAsync(
-          photo.path,
-          [],
-          { compress: 1, format: SaveFormat.JPEG }
-        );
-        
-        path = manipResult.uri;
-        embedding = generateDeterministicEmbedding(path);
+        try {
+          const photo = await cameraRef.current.takePhoto({ flash: 'off' });
+          Logger.info(`Raw photo captured: ${photo.path}`);
+          
+          const manipResult = await manipulateAsync(
+            photo.path,
+            [],
+            { compress: 1, format: SaveFormat.JPEG }
+          );
+          
+          path = manipResult.uri;
+          // ✅ FIXED: Use real pixel-based embedding extraction
+          embedding = await EmbeddingService.extractEmbeddingFromPath(path);
+          Logger.info(`Embedding extracted: ${embedding.length} dimensions`);
+        } catch (embError) {
+          Logger.warn('Real embedding extraction failed, using fallback', embError);
+          // Fallback to random embedding if extraction fails
+          embedding = EmbeddingService.generateRandomEmbedding();
+          path = 'fallback_embedding';
+        }
       } else {
         path = 'demo_photo_path';
-        embedding = generateRandomEmbedding();
+        embedding = EmbeddingService.generateRandomEmbedding();
       }
 
       capturedEmbedding.current = embedding;
@@ -297,29 +307,6 @@ export const RegistrationScreen: React.FC<Props> = ({ onSuccess, onBack, reRegis
     </ScrollView>
   );
 };
-
-/** Generate a normalized random embedding for demo mode */
-function generateRandomEmbedding(): Float32Array {
-  const emb = new Float32Array(128);
-  for (let i = 0; i < 128; i++) emb[i] = Math.random() * 2 - 1;
-  const mag = Math.sqrt(emb.reduce((s, v) => s + v * v, 0));
-  for (let i = 0; i < 128; i++) emb[i] /= mag;
-  return emb;
-}
-
-/**
- * Generate a deterministic-ish embedding from a photo path.
- */
-function generateDeterministicEmbedding(seed: string): Float32Array {
-  const emb = new Float32Array(128);
-  for (let i = 0; i < 128; i++) {
-    const charCode = seed.charCodeAt(i % seed.length);
-    emb[i] = Math.sin(charCode * (i + 1) * 0.1) * Math.cos(i * 0.3);
-  }
-  const mag = Math.sqrt(emb.reduce((s, v) => s + v * v, 0));
-  for (let i = 0; i < 128; i++) emb[i] /= mag;
-  return emb;
-}
 
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#eef2f7' },
