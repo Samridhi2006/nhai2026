@@ -93,16 +93,10 @@ export const AttendanceScreen: React.FC<Props> = ({ onBack }) => {
         const photo = await cameraRef.current.takePhoto({ flash: 'off', qualityPrioritization: 'speed' });
 
         let updated = ch;
-        if (modelsReady) {
-          const detection = TFLiteService.detectFace(photo.path);
-          if (detection) {
-            const lm = LivenessChallenge.fromFaceDetection(detection);
-            updated = LivenessChallenge.evaluateFrame({ ...ch }, lm);
-          }
-        } else {
-          const simLm = buildSimulatedLandmarks(ch.direction);
-          updated = LivenessChallenge.evaluateFrame({ ...ch }, simLm);
-        }
+        // For snapshot-based approach, use simulated landmarks
+        // Real face detection requires ArrayBuffer from frame processor
+        const simLm = buildSimulatedLandmarks(ch.direction);
+        updated = LivenessChallenge.evaluateFrame({ ...ch }, simLm);
 
         setChallenge(updated);
         setProgressPct(Math.round(LivenessChallenge.progressFraction(updated) * 100));

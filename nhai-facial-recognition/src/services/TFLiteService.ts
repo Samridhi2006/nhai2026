@@ -135,6 +135,28 @@ export class TFLiteService {
   }
 
   /**
+   * Detect faces from image file path (for snapshot-based approach)
+   * 
+   * NOTE: This is a convenience wrapper. For real detection, you need to:
+   * 1. Load the image file
+   * 2. Decode JPEG/PNG to pixels
+   * 3. Resize to 320x320
+   * 4. Normalize and convert to ArrayBuffer
+   * 5. Call detectFace(buffer)
+   * 
+   * Since TFLite v3 doesn't expose image loading utilities, we return null
+   * and suggest using frame-based detection or implementing image loading.
+   */
+  static detectFaceFromPath(imagePath: string): FaceDetection | null {
+    Logger.warn('detectFaceFromPath: Image loading not implemented. Use frame processor or load pixels manually.');
+    // For snapshot-based apps without frameProcessor, you need to:
+    // 1. Use a library like @react-native-community/image-editor
+    // 2. Or implement native image loading bridge
+    // 3. Or use demo/mock detection
+    return null;
+  }
+
+  /**
    * Extract face embedding (112x112 RGB normalized input)
    * Output: 128-dimensional embedding vector
    * Time: ~150-200ms
