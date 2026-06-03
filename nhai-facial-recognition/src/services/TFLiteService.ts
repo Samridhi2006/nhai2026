@@ -158,7 +158,7 @@ export class TFLiteService {
 
   /**
    * Extract face embedding (112x112 RGB normalized input)
-   * Output: 128-dimensional embedding vector
+   * Output: 192-dimensional embedding vector (batch of 2, we take first)
    * Time: ~150-200ms
    * 
    * ✅ v3 API: Input/output are ArrayBuffers

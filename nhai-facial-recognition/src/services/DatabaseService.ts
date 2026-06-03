@@ -9,7 +9,7 @@ import * as SQLite from 'expo-sqlite';
 import type { Employee } from '../types/Employee';
 import type { AttendanceRecord } from '../types/AttendanceRecord';
 
-const EMBEDDING_DIM = 128;
+const EMBEDDING_DIM = 192;  // MobileFaceNet outputs 192D vectors
 
 // ─── DB bootstrap ─────────────────────────────────────────────────────────────
 

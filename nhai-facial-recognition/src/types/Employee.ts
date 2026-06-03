@@ -5,7 +5,7 @@
 
 /**
  * A registered employee with an enrolled face embedding.
- * The `faceEmbedding` field stores the 128-dimensional MobileFaceNet vector
+ * The `faceEmbedding` field stores the 192-dimensional MobileFaceNet vector
  * as a plain number array (serialised to JSON in SQLite).
  */
 export interface Employee {

@@ -11,7 +11,6 @@
 
 import { useRef, useState, useCallback } from 'react';
 import { Alert } from 'react-native';
-import type { Camera } from 'react-native-vision-camera';
 import * as FileSystem from 'expo-file-system';
 
 import { DatabaseService } from '../services/DatabaseService';
@@ -32,7 +31,7 @@ export interface RegistrationResult {
 }
 
 export function useFaceRegistration() {
-  const cameraRef = useRef<Camera | null>(null);
+  const cameraRef = useRef<any>(null);
   const [isRegistering, setIsRegistering] = useState(false);
   const [capturedEmbedding, setCapturedEmbedding] = useState<Float32Array | null>(null);
   const [capturedPhotoUri, setCapturedPhotoUri] = useState<string | null>(null);
@@ -78,6 +77,9 @@ export function useFaceRegistration() {
       }
 
       // STEP 1B: Normalize URI (fix Android issues) --------------------------
+      if (!rawPhotoPath) {
+        throw new Error('Photo path is empty');
+      }
       normalizedUri = normalizePhotoUri(rawPhotoPath);
       Logger.info(`[Registration] Photo URI: ${normalizedUri}`);
 
@@ -105,7 +107,8 @@ export function useFaceRegistration() {
       }
 
       // STEP 1E: Validate embedding -------------------------------------------
-      const validation = validateEmbedding(embedding, 128);
+      // NOTE: EmbeddingService outputs 192D vectors, we validate for that
+      const validation = validateEmbedding(embedding, 192);
       if (!validation.valid) {
         console.error('[Registration] Invalid embedding:', validation.error);
         throw new Error(`Face data validation failed: ${validation.error}`);

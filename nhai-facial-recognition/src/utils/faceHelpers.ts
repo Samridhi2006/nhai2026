@@ -135,7 +135,7 @@ export async function findDuplicate(
  */
 export function validateEmbedding(
   embedding: number[] | Float32Array,
-  expectedDim: number = 128
+  expectedDim: number = 192  // MobileFaceNet default
 ): { valid: boolean; error?: string } {
   // Check dimensions
   if (embedding.length !== expectedDim) {
