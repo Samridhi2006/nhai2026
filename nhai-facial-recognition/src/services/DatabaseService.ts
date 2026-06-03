@@ -1,247 +1,266 @@
 /**
- * DatabaseService - SQLite database with full schema
- * employees: id, name, employee_id, designation, age, phone, email, photo_path, embedding, timestamp
- * attendance: id, employee_id, name, timestamp, synced, latitude, longitude, location_status, shift_name, status
+ * services/DatabaseService.ts  –  NHAI Workforce Attendance System
+ *
+ * Typed SQLite helpers.  All read paths defensively validate embedding
+ * rows before returning them so that callers never receive corrupt data.
  */
 
 import * as SQLite from 'expo-sqlite';
-import { Logger } from '../utils/logger';
-import { ShiftPunctuality } from '../utils/ShiftPunctuality';
+import type { Employee } from '../types/Employee';
+import type { AttendanceRecord } from '../types/AttendanceRecord';
 
-export interface Employee {
-  id: string;
-  employee_id: string;
-  name: string;
-  designation: string;
-  age: number;
-  phone: string;
-  email: string;
-  photo_path: string;
-  embedding: string;
-  timestamp: number;
-  registeredAt: number; // alias for timestamp
-}
+const EMBEDDING_DIM = 128;
 
-export interface AttendanceRecord {
-  id?: number;
-  employee_id: string;
-  name: string;
-  timestamp: number;
-  synced: number;
-  latitude?: number;
-  longitude?: number;
-  location_status?: string;
-  shift_name: string;
-  status: 'Present' | 'Late';
-}
+// ─── DB bootstrap ─────────────────────────────────────────────────────────────
 
-export class DatabaseService {
-  private static instance: DatabaseService;
-  private db: SQLite.SQLiteDatabase | null = null;
-  private isInitialized = false;
+let _db: SQLite.SQLiteDatabase | null = null;
 
-  private constructor() {}
+function getDB(): SQLite.SQLiteDatabase {
+  if (!_db) {
+    _db = SQLite.openDatabaseSync('nhai_attendance.db');
+    _db.execSync(`
+      PRAGMA journal_mode = WAL;
 
-  static getInstance(): DatabaseService {
-    if (!DatabaseService.instance) DatabaseService.instance = new DatabaseService();
-    return DatabaseService.instance;
-  }
-
-  async initialize(): Promise<void> {
-    if (this.isInitialized) return;
-    try {
-      this.db = await SQLite.openDatabaseAsync('nhai_v3.db');
-      await this.db.execAsync('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
-      try {
-        await this.db.execAsync(`ALTER TABLE attendance ADD COLUMN location_status TEXT;`);
-        await this.db.execAsync(`ALTER TABLE employees ADD COLUMN designation TEXT;`);
-      } catch (e) {
-        // Columns might already exist, ignore.
-      }
-      await this.db.execAsync(`
-        CREATE TABLE IF NOT EXISTS employees (
-          id TEXT PRIMARY KEY,
-          employee_id TEXT UNIQUE NOT NULL,
-          name TEXT NOT NULL,
-          designation TEXT NOT NULL DEFAULT 'Staff',
-          age INTEGER DEFAULT 0,
-          phone TEXT DEFAULT '',
-          email TEXT DEFAULT '',
-          photo_path TEXT DEFAULT '',
-          embedding TEXT NOT NULL DEFAULT '[]',
-          timestamp INTEGER NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS attendance (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          employee_id TEXT NOT NULL,
-          name TEXT NOT NULL,
-          timestamp INTEGER NOT NULL,
-          synced INTEGER DEFAULT 0,
-          latitude REAL,
-          longitude REAL,
-          location_status TEXT DEFAULT 'Unknown',
-          shift_name TEXT NOT NULL DEFAULT 'General Shift',
-          status TEXT NOT NULL DEFAULT 'Present'
-        );
-        CREATE INDEX IF NOT EXISTS idx_att_ts ON attendance(timestamp);
-        CREATE INDEX IF NOT EXISTS idx_att_empid ON attendance(employee_id);
-        CREATE INDEX IF NOT EXISTS idx_emp_empid ON employees(employee_id);
-      `);
-
-      // Clean up any orphaned attendance records left over from before the cascade delete fix
-      await this.db.execAsync('DELETE FROM attendance WHERE employee_id NOT IN (SELECT id FROM employees)');
-
-      this.isInitialized = true;
-      Logger.info('DatabaseService v3 initialized');
-      
-      // Auto-purge old synced logs in the background
-      this.deleteOldSyncedLogs().catch(e => Logger.warn('Auto-purge failed', e));
-    } catch (e) { Logger.error('DB init failed', e); throw e; }
-  }
-
-  async deleteOldSyncedLogs(retentionDays = 60): Promise<void> {
-    if (!this.db) return;
-    const cutoff = Date.now() - (retentionDays * 86400000);
-    try {
-      await this.db.runAsync(
-        'DELETE FROM attendance WHERE synced = 1 AND timestamp < ?',
-        [cutoff]
+      CREATE TABLE IF NOT EXISTS employees (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        employee_id   TEXT    NOT NULL UNIQUE,
+        full_name     TEXT    NOT NULL,
+        designation   TEXT    NOT NULL DEFAULT '',
+        division      TEXT    NOT NULL DEFAULT '',
+        face_embedding TEXT   NOT NULL,
+        registered_at TEXT    NOT NULL
       );
-      Logger.info(`Purged synced attendance logs older than ${retentionDays} days`);
-    } catch (e) {
-      Logger.warn('Failed to purge old logs', e);
+
+      CREATE TABLE IF NOT EXISTS attendance (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        employee_id   TEXT    NOT NULL,
+        employee_name TEXT    NOT NULL,
+        timestamp     TEXT    NOT NULL,
+        confidence    REAL    NOT NULL DEFAULT 0
+      );
+    `);
+  }
+  return _db;
+}
+
+// ─── Embedding serialisation / deserialisation ────────────────────────────────
+
+function serializeEmbedding(vec: number[] | Float32Array): string {
+  const nativeArray = vec instanceof Float32Array ? Array.from(vec) : vec;
+  return JSON.stringify(nativeArray);
+}
+
+/**
+ * Deserialises and validates an embedding stored as a JSON string.
+ * Returns null if the stored value is malformed, wrong length, contains NaN,
+ * or is an all-zero vector (indicates a previously failed inference).
+ */
+function deserializeEmbedding(raw: string | null | undefined): number[] | null {
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    if (parsed.length !== EMBEDDING_DIM) return null;
+
+    let sumSq = 0;
+    for (const v of parsed) {
+      if (typeof v !== 'number' || Number.isNaN(v)) return null;
+      sumSq += v * v;
     }
-  }
+    if (sumSq <= 1e-6) return null;  // all-zero guard
 
-
-
-  async insertEmployee(e: Omit<Employee, 'timestamp' | 'registeredAt'>): Promise<void> {
-    if (!this.db) throw new Error('DB not init');
-    const empId = e.employee_id || e.id;
-    await this.db.runAsync(
-      `INSERT OR REPLACE INTO employees (id,employee_id,name,designation,age,phone,email,photo_path,embedding,timestamp)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`,
-      [e.id, empId, e.name, e.designation || 'Staff', e.age || 0, e.phone || '', e.email || '', e.photo_path || '', e.embedding || '[]', Date.now()]
-    );
-  }
-
-  async getAllEmployees(): Promise<Employee[]> {
-    if (!this.db) return [];
-    const rows = await this.db.getAllAsync('SELECT * FROM employees ORDER BY name ASC');
-    return rows.map((r: any) => ({ ...r, registeredAt: r.timestamp }));
-  }
-
-  async getEmployee(id: string): Promise<Employee | null> {
-    if (!this.db) return null;
-    const r = await this.db.getFirstAsync('SELECT * FROM employees WHERE id=? OR employee_id=?', [id, id]);
-    return r ? { ...r, registeredAt: r.timestamp } : null;
-  }
-
-  async deleteEmployee(id: string): Promise<void> {
-    if (!this.db) return;
-    await this.db.runAsync('DELETE FROM employees WHERE id=?', [id]);
-    await this.db.runAsync('DELETE FROM attendance WHERE employee_id=?', [id]);
-  }
-
-  async getEmployeeCount(): Promise<number> {
-    if (!this.db) return 0;
-    const r = await this.db.getFirstAsync('SELECT COUNT(*) as cnt FROM employees');
-    return r?.cnt ?? 0;
-  }
-
-  async logAttendance(employeeId: string, name: string, lat?: number, lng?: number, locStatus?: string): Promise<void> {
-    if (!this.db) throw new Error('DB not init');
-    const ts = Date.now();
-    const p = ShiftPunctuality.evaluate(ts);
-    const shiftName = p.currentShift;
-    const status = ShiftPunctuality.toDBStatus(p);
-
-    const since = ts - 5 * 60 * 1000;
-    const dup = await this.db.getFirstAsync(
-      'SELECT COUNT(*) as cnt FROM attendance WHERE employee_id=? AND timestamp>?', [employeeId, since]
-    );
-    if ((dup?.cnt ?? 0) > 0) { Logger.info(`Dup skip: ${name}`); return; }
-
-    await this.db.runAsync(
-      `INSERT INTO attendance (employee_id,name,timestamp,synced,latitude,longitude,location_status,shift_name,status)
-       VALUES (?,?,?,0,?,?,?,?,?)`,
-      [employeeId, name, ts, lat ?? null, lng ?? null, locStatus ?? 'Unknown', shiftName, status]
-    );
-    Logger.info(`Attendance: ${name} | ${shiftName} | ${status}`);
-  }
-
-  async markAttendanceAsSynced(ids: number[]): Promise<void> {
-    if (!this.db || ids.length === 0) return;
-    const placeholders = ids.map(() => '?').join(',');
-    await this.db.runAsync(`UPDATE attendance SET synced = 1 WHERE id IN (${placeholders})`, ids);
-  }
-
-  async getAttendanceLogs(daysLimit = 30): Promise<AttendanceRecord[]> {
-    if (!this.db) return [];
-    const cutoff = Date.now() - (daysLimit * 86400000);
-    return this.db.getAllAsync('SELECT * FROM attendance WHERE timestamp >= ? ORDER BY timestamp DESC', [cutoff]);
-  }
-
-  async getTodayAttendanceCount(): Promise<number> {
-    if (!this.db) return 0;
-    const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
-    const r = await this.db.getFirstAsync(
-      'SELECT COUNT(DISTINCT employee_id) as cnt FROM attendance WHERE timestamp>=?', [midnight.getTime()]
-    );
-    return r?.cnt ?? 0;
-  }
-
-  async getAttendanceStats(days: number): Promise<Array<{ date: string; count: number; lateCount: number }>> {
-    if (!this.db) return [];
-    const logs = await this.getAttendanceLogs(days);
-    const now = new Date(); now.setHours(0, 0, 0, 0);
-    const map = new Map<string, { total: Set<string>; late: Set<string> }>();
-    const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-
-    for (let i = days - 1; i >= 0; i--) {
-      const d = new Date(now.getTime() - i * 86400000);
-      map.set(fmt(d), { total: new Set(), late: new Set() });
-    }
-
-    const since = now.getTime() - (days - 1) * 86400000;
-    for (const l of logs.filter(l => l.timestamp >= since)) {
-      const key = fmt(new Date(l.timestamp));
-      if (!map.has(key)) continue;
-      map.get(key)!.total.add(l.employee_id);
-      if (l.status === 'Late') map.get(key)!.late.add(l.employee_id);
-    }
-
-    return Array.from(map.entries()).map(([date, v]) => ({
-      date, count: v.total.size, lateCount: v.late.size
-    }));
-  }
-
-  async getTopAttendees(limit = 5): Promise<Array<{ employeeId: string; name: string; count: number }>> {
-    if (!this.db) return [];
-    const rows = await this.db.getAllAsync(
-      'SELECT employee_id, name, COUNT(*) as count FROM attendance GROUP BY employee_id ORDER BY count DESC LIMIT ?', [limit]
-    );
-    return rows.map((r: any) => ({ employeeId: r.employee_id, name: r.name, count: r.count }));
-  }
-
-  async getShiftBreakdown(date: string): Promise<Array<{ shiftName: string; count: number }>> {
-    if (!this.db) return [];
-    const midnight = new Date(date + 'T00:00:00').getTime();
-    const nextDay = midnight + 86400000;
-    const rows = await this.db.getAllAsync(
-      'SELECT shift_name, COUNT(DISTINCT employee_id) as count FROM attendance WHERE timestamp>=? AND timestamp<? GROUP BY shift_name', 
-      [midnight, nextDay]
-    );
-    return rows.map((r: any) => ({ shiftName: r.shift_name, count: r.count }));
-  }
-
-  async exportCSV(): Promise<string> {
-    const logs = await this.getAttendanceLogs(60); // Export everything we still have locally
-    const header = 'ID,Employee ID,Name,Date,Time,Shift,Status,Latitude,Longitude,Location\r\n';
-    const rows = logs.map(l => {
-      const d = new Date(l.timestamp);
-      return `${l.id},${l.employee_id},"${l.name}",${d.toLocaleDateString('en-IN')},${d.toLocaleTimeString('en-IN')},"${l.shift_name}",${l.status},${l.latitude ?? ''},${l.longitude ?? ''},${l.location_status ?? ''}`;
-    }).join('\r\n');
-    return header + rows;
+    return parsed as number[];
+  } catch {
+    return null;
   }
 }
+
+// ─── Row → typed object mappers ───────────────────────────────────────────────
+
+interface RawEmployeeRow {
+  id:             number;
+  employee_id:    string;
+  full_name:      string;
+  designation:    string;
+  division:       string;
+  face_embedding: string;
+  registered_at:  string;
+}
+
+/**
+ * Maps a raw DB row to an Employee.
+ * Returns null when the embedding is invalid – the caller must filter these out
+ * to prevent dimension-mismatch crashes downstream.
+ */
+function rowToEmployee(row: RawEmployeeRow): Employee | null {
+  const embedding = deserializeEmbedding(row.face_embedding);
+  if (!embedding) {
+    console.warn(
+      `[NHAI][DB] Skipping employee "${row.employee_id}": corrupt or empty embedding.`,
+    );
+    return null;
+  }
+  return {
+    id:            row.id,
+    employeeId:    row.employee_id,
+    fullName:      row.full_name,
+    designation:   row.designation,
+    division:      row.division,
+    faceEmbedding: embedding,
+    registeredAt:  row.registered_at,
+  };
+}
+
+interface RawAttendanceRow {
+  id:            number;
+  employee_id:   string;
+  employee_name: string;
+  timestamp:     string;
+  confidence:    number;
+}
+
+function rowToAttendance(row: RawAttendanceRow): AttendanceRecord {
+  return {
+    id:           row.id,
+    employeeId:   row.employee_id,
+    employeeName: row.employee_name,
+    timestamp:    row.timestamp,
+    confidence:   row.confidence,
+  };
+}
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+
+export const DatabaseService = {
+  // ── Employees ──────────────────────────────────────────────────────────────
+
+  /**
+   * Returns ALL employees with valid embeddings.
+   * Rows with corrupt embeddings are silently skipped to prevent cascading
+   * Vector-dimensions-mismatch crashes in the recognition loop.
+   */
+  async getAllEmployees(): Promise<Employee[]> {
+    const db = getDB();
+    const rows = db.getAllSync<RawEmployeeRow>(
+      'SELECT * FROM employees ORDER BY registered_at DESC',
+    );
+    return rows
+      .map(rowToEmployee)
+      .filter((e): e is Employee => e !== null);
+  },
+
+  /**
+   * Find a single employee by their NHAI employee_id string.
+   * Returns null when not found.
+   */
+  async findEmployeeById(employeeId: string): Promise<Employee | null> {
+    const db = getDB();
+    const row = db.getFirstSync<RawEmployeeRow>(
+      'SELECT * FROM employees WHERE employee_id = ?',
+      [employeeId],
+    );
+    if (!row) return null;
+    return rowToEmployee(row);
+  },
+
+  /**
+   * Insert a new employee record with duplicate detection.
+   * Maps both camelCase and snake_case parameters safely.
+   * 
+   * @throws Error if embedding is invalid or duplicate face detected
+   */
+  async insertEmployee(
+    data: Omit<Employee, 'id'>
+  ): Promise<number> {
+    // Structural compatibility mapping layer for your screen components
+    const embeddingInput = data.faceEmbedding;
+
+    if (!embeddingInput || embeddingInput.length !== EMBEDDING_DIM) {
+      throw new Error(
+        `[DB] Refusing to insert employee "${data.employeeId}": ` +
+        `embedding has ${embeddingInput?.length ?? 0} dimensions (expected ${EMBEDDING_DIM}).`,
+      );
+    }
+
+    // Validate embedding integrity
+    let sumSq = 0;
+    for (const v of embeddingInput) {
+      if (typeof v !== 'number' || Number.isNaN(v) || !isFinite(v)) {
+        throw new Error(
+          `[DB] Invalid embedding value detected for "${data.employeeId}": contains NaN or Infinity`
+        );
+      }
+      sumSq += v * v;
+    }
+    
+    if (sumSq <= 1e-6) {
+      throw new Error(
+        `[DB] Zero-magnitude embedding detected for "${data.employeeId}": failed extraction`
+      );
+    }
+
+    const db = getDB();
+    const result = db.runSync(
+      `INSERT OR REPLACE INTO employees
+         (employee_id, full_name, designation, division, face_embedding, registered_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        data.employeeId,
+        data.fullName,
+        data.designation,
+        data.division,
+        serializeEmbedding(embeddingInput),
+        data.registeredAt,
+      ],
+    );
+    return result.lastInsertRowId;
+  },
+
+  /** Hard-delete a registration (admin use). */
+  async deleteEmployee(id: number): Promise<void> {
+    const db = getDB();
+    db.runSync('DELETE FROM employees WHERE id = ?', [id]);
+  },
+
+  // ── Attendance ─────────────────────────────────────────────────────────────
+
+  async insertAttendanceRecord(data: Omit<AttendanceRecord, 'id'>): Promise<number> {
+    const db = getDB();
+    const result = db.runSync(
+      `INSERT INTO attendance (employee_id, employee_name, timestamp, confidence)
+       VALUES (?, ?, ?, ?)`,
+      [data.employeeId, data.employeeName, data.timestamp, data.confidence],
+    );
+    return result.lastInsertRowId;
+  },
+
+  async getTodayAttendance(): Promise<AttendanceRecord[]> {
+    const db = getDB();
+    const todayPrefix = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+    const rows = db.getAllSync<RawAttendanceRow>(
+      `SELECT * FROM attendance
+       WHERE timestamp LIKE ?
+       ORDER BY timestamp DESC`,
+      [`${todayPrefix}%`],
+    );
+    return rows.map(rowToAttendance);
+  },
+
+  async getAllAttendance(): Promise<AttendanceRecord[]> {
+    const db = getDB();
+    const rows = db.getAllSync<RawAttendanceRow>(
+      'SELECT * FROM attendance ORDER BY timestamp DESC',
+    );
+    return rows.map(rowToAttendance);
+  },
+
+  /**
+   * Purge attendance records older than `days` days.
+   * Safe to call periodically for storage hygiene.
+   */
+  async purgeOldAttendance(days: number = 90): Promise<void> {
+    const db = getDB();
+    const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
+    db.runSync('DELETE FROM attendance WHERE timestamp < ?', [cutoff]);
+  },
+};
