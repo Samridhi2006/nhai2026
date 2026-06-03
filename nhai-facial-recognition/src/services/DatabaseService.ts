@@ -93,7 +93,24 @@ export class DatabaseService {
 
       this.isInitialized = true;
       Logger.info('DatabaseService v3 initialized');
+      
+      // Auto-purge old synced logs in the background
+      this.deleteOldSyncedLogs().catch(e => Logger.warn('Auto-purge failed', e));
     } catch (e) { Logger.error('DB init failed', e); throw e; }
+  }
+
+  async deleteOldSyncedLogs(retentionDays = 60): Promise<void> {
+    if (!this.db) return;
+    const cutoff = Date.now() - (retentionDays * 86400000);
+    try {
+      await this.db.runAsync(
+        'DELETE FROM attendance WHERE synced = 1 AND timestamp < ?',
+        [cutoff]
+      );
+      Logger.info(`Purged synced attendance logs older than ${retentionDays} days`);
+    } catch (e) {
+      Logger.warn('Failed to purge old logs', e);
+    }
   }
 
 
@@ -159,9 +176,10 @@ export class DatabaseService {
     await this.db.runAsync(`UPDATE attendance SET synced = 1 WHERE id IN (${placeholders})`, ids);
   }
 
-  async getAttendanceLogs(): Promise<AttendanceRecord[]> {
+  async getAttendanceLogs(daysLimit = 30): Promise<AttendanceRecord[]> {
     if (!this.db) return [];
-    return this.db.getAllAsync('SELECT * FROM attendance ORDER BY timestamp DESC');
+    const cutoff = Date.now() - (daysLimit * 86400000);
+    return this.db.getAllAsync('SELECT * FROM attendance WHERE timestamp >= ? ORDER BY timestamp DESC', [cutoff]);
   }
 
   async getTodayAttendanceCount(): Promise<number> {
@@ -175,7 +193,7 @@ export class DatabaseService {
 
   async getAttendanceStats(days: number): Promise<Array<{ date: string; count: number; lateCount: number }>> {
     if (!this.db) return [];
-    const logs = await this.getAttendanceLogs();
+    const logs = await this.getAttendanceLogs(days);
     const now = new Date(); now.setHours(0, 0, 0, 0);
     const map = new Map<string, { total: Set<string>; late: Set<string> }>();
     const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -218,7 +236,7 @@ export class DatabaseService {
   }
 
   async exportCSV(): Promise<string> {
-    const logs = await this.getAttendanceLogs();
+    const logs = await this.getAttendanceLogs(60); // Export everything we still have locally
     const header = 'ID,Employee ID,Name,Date,Time,Shift,Status,Latitude,Longitude,Location\r\n';
     const rows = logs.map(l => {
       const d = new Date(l.timestamp);

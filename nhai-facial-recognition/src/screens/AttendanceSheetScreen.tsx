@@ -4,7 +4,7 @@
 
 import React, { useEffect, useState } from 'react';
 import {
-  View, Text, StyleSheet, FlatList,
+  View, Text, StyleSheet, FlatList, TextInput,
   TouchableOpacity, ActivityIndicator, Alert
 } from 'react-native';
 import { DatabaseService, AttendanceRecord } from '../services/DatabaseService';
@@ -21,6 +21,7 @@ export const AttendanceSheetScreen: React.FC<Props> = ({ onBack }) => {
   const [logs, setLogs] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
     loadLogs();
@@ -128,6 +129,11 @@ export const AttendanceSheetScreen: React.FC<Props> = ({ onBack }) => {
   const totalLogs = logs.length;
   const unsyncedCount = logs.filter(log => log.synced === 0).length;
 
+  const filteredLogs = logs.filter(log => 
+    log.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    log.employee_id.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   return (
     <View style={s.container}>
       <View style={s.header}>
@@ -146,6 +152,15 @@ export const AttendanceSheetScreen: React.FC<Props> = ({ onBack }) => {
           <Text style={s.statLabel}>Unsynced</Text>
         </View>
       </View>
+
+      {/* Search Bar */}
+      <TextInput
+        style={s.searchInput}
+        placeholder="Search by name or ID..."
+        placeholderTextColor="#999"
+        value={searchQuery}
+        onChangeText={setSearchQuery}
+      />
 
       {/* Sync Button */}
       {unsyncedCount > 0 && (
@@ -179,7 +194,7 @@ export const AttendanceSheetScreen: React.FC<Props> = ({ onBack }) => {
         </View>
       ) : (
         <FlatList
-          data={logs}
+          data={filteredLogs}
           keyExtractor={(item) => item.id.toString()}
           renderItem={renderItem}
           contentContainerStyle={s.listContent}
@@ -215,6 +230,10 @@ const s = StyleSheet.create({
     alignItems: 'center', marginBottom: 16, flexDirection: 'row', justifyContent: 'center'
   },
   exportBtnTxt: { color: '#fff', fontSize: 14, fontWeight: '700' },
+  searchInput: {
+    backgroundColor: '#fff', borderRadius: 10, padding: 12, marginBottom: 12,
+    fontSize: 15, borderWidth: 1, borderColor: '#e1e4e8', color: '#333'
+  },
   btnDisabled: { opacity: 0.7 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadingTxt: { marginTop: 10, color: '#666', fontSize: 14 },

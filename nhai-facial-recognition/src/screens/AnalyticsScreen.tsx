@@ -68,8 +68,12 @@ export const AnalyticsScreen: React.FC<Props> = ({ onBack }) => {
         if (!shiftMap.has(sn)) shiftMap.set(sn, new Set());
         shiftMap.get(sn)!.add(l.employee_id);
       });
-      const shiftArr = Array.from(shiftMap.entries()).map(([shiftName, idSet]) => ({ shiftName, count: idSet.size }));
-      setShifts(shiftArr.length > 0 ? shiftArr : [{ shiftName: 'General Shift', count: uniqueToday }]);
+      const shiftArr = [
+        { shiftName: 'Morning Shift', count: shiftMap.get('Morning Shift')?.size || 0 },
+        { shiftName: 'Afternoon Shift', count: shiftMap.get('Afternoon Shift')?.size || 0 },
+        { shiftName: 'Night Shift', count: shiftMap.get('Night Shift')?.size || 0 },
+      ];
+      setShifts(shiftArr);
 
       const toLocalYMD = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
@@ -181,7 +185,7 @@ export const AnalyticsScreen: React.FC<Props> = ({ onBack }) => {
             <View style={[GLOBAL_STYLES.card, { marginTop: 12 }]}>
               <Text style={s.cardTitle}>🕒 Shift Distribution</Text>
               {shifts.map(shift => {
-                const width = `${Math.max(10, (shift.count / totalShift) * 100)}%` as any;
+                const width = `${shift.count > 0 ? Math.max(10, (shift.count / totalShift) * 100) : 0}%` as any;
                 const color = shiftColors[shift.shiftName] ?? COLORS.info;
                 return (
                   <View key={shift.shiftName} style={s.shiftRow}>
